@@ -13,6 +13,10 @@ UNIFIED_METRICS_ENDPOINT = (
     "&resolution={resolution}&window_start={start}&window_end={end}&for_tz=Europe/Warsaw"
 )
 
+# Earliest date for the all-time sell revenue history (Pstryk market start).
+# Months before a customer's contract are returned by the API as zeros.
+SELL_HISTORY_START = (2024, 10, 1)
+
 ATTR_BUY_PRICE = "buy_price"
 ATTR_SELL_PRICE = "sell_price"
 ATTR_HOURS = "hours"
