@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.event import async_track_point_in_time
@@ -8,6 +8,7 @@ from .const import (
     DOMAIN,
     API_URL,
     UNIFIED_METRICS_ENDPOINT,
+    SELL_HISTORY_START,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_DELAY
 )
@@ -22,6 +23,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         self.api_client = api_client
         self._unsub_hourly = None
         self._unsub_midnight = None
+        # All-time sell history, refreshed only at startup and at midnight
+        # (never by hourly updates or update_entity calls).
+        self.sell_history = None
 
         if retry_attempts is None:
             retry_attempts = DEFAULT_RETRY_ATTEMPTS
@@ -283,6 +287,58 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "rae_usage": rae_usage
         }
 
+    async def async_refresh_sell_history(self):
+        """Fetch monthly sell data since SELL_HISTORY_START in one request.
+
+        Result is grouped per local calendar year. On failure the previous
+        history is kept, so the total sensor keeps its last good value.
+        """
+        try:
+            start_local = dt_util.start_of_local_day(date(*SELL_HISTORY_START))
+            now = dt_util.now()
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            end_local = dt_util.start_of_local_day(
+                (month_start + timedelta(days=32)).replace(day=1).date()
+            )
+
+            format_time = lambda dt: dt_util.as_utc(dt).strftime("%Y-%m-%dT%H:%M:%SZ")
+            url = API_URL + UNIFIED_METRICS_ENDPOINT.format(
+                resolution="month",
+                start=format_time(start_local),
+                end=format_time(end_local),
+            )
+
+            _LOGGER.debug("Fetching sell history from %s to %s", start_local, end_local)
+            response = await self.api_client.fetch(
+                url,
+                max_retries=self.retry_attempts,
+                base_delay=self.retry_delay
+            )
+            if not response:
+                raise UpdateFailed("Empty sell history response")
+
+            years = {}
+            for frame in self._normalized_frames(response):
+                parsed = dt_util.parse_datetime(frame.get("start") or "")
+                if not parsed:
+                    continue
+                year = str(dt_util.as_local(parsed).year)
+                entry = years.setdefault(year, {"sell_revenue": 0.0, "energy_sold": 0.0})
+                entry["sell_revenue"] += frame.get("energy_sold_value", 0) or 0
+                entry["energy_sold"] += frame.get("rae", 0) or 0
+
+            for entry in years.values():
+                entry["sell_revenue"] = round(entry["sell_revenue"], 2)
+                entry["energy_sold"] = round(entry["energy_sold"], 3)
+
+            self.sell_history = {
+                "years": dict(sorted(years.items())),
+                "fetched_at": dt_util.now(),
+            }
+            _LOGGER.info("Sell history loaded: %s", self.sell_history["years"])
+        except Exception as err:
+            _LOGGER.warning("Failed to fetch sell history: %s. Keeping previous value.", err)
+
     def schedule_midnight_update(self):
         if hasattr(self, '_unsub_midnight'):
             if self._unsub_midnight:
@@ -307,6 +363,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             data = await self._async_update_data()
             self.data = data
             self.last_update_success = True
+            await self.async_refresh_sell_history()
             self.async_update_listeners()
         except Exception as err:
             _LOGGER.error("Midnight cost update failed: %s - will retry next hour", err)

@@ -166,6 +166,15 @@ async def async_setup_entry(
             cost_coordinator, period, entry.entry_id
         ))
 
+    for metric, period in FLOW_SENSORS:
+        remaining_entities.append(PstrykFlowSensor(
+            cost_coordinator, metric, period, entry.entry_id
+        ))
+    for kind in ("sell_revenue", "energy_sold"):
+        remaining_entities.append(PstrykTotalSellSensor(cost_coordinator, kind, entry.entry_id))
+    for period in ("monthly", "yearly", "total"):
+        remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, period, entry.entry_id))
+
     _LOGGER.info("Registering %d current price sensors with data and %d additional sensors as unavailable",
                  len(entities), len(remaining_entities))
     async_add_entities(entities + remaining_entities)
@@ -179,6 +188,7 @@ async def async_setup_entry(
             data = await cost_coordinator._async_update_data()
             cost_coordinator.data = data
             cost_coordinator.last_update_success = True
+            await cost_coordinator.async_refresh_sell_history()
             cost_coordinator.async_update_listeners()
             _LOGGER.info("Cost coordinator loaded successfully - %d sensors updated",
                         len(remaining_entities))
@@ -922,3 +932,280 @@ class PstrykFinancialBalanceSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self) -> bool:
         return self.coordinator.last_update_success and self.coordinator.data is not None
+
+
+# Energy / money flow sensors built on data the cost coordinator already has.
+# key: (data field, name suffix, unit, device class, state class, icon)
+FLOW_METRICS = {
+    "energy_bought": ("fae_usage", "Energy Bought", "kWh", SensorDeviceClass.ENERGY,
+                      SensorStateClass.TOTAL_INCREASING, "mdi:transmission-tower-import"),
+    "energy_sold": ("rae_usage", "Energy Sold", "kWh", SensorDeviceClass.ENERGY,
+                    SensorStateClass.TOTAL_INCREASING, "mdi:transmission-tower-export"),
+    "buy_cost": ("total_cost", "Buy Cost", "PLN", SensorDeviceClass.MONETARY,
+                 SensorStateClass.TOTAL, "mdi:cash-minus"),
+    "sell_revenue": ("total_sold", "Sell Revenue", "PLN", SensorDeviceClass.MONETARY,
+                     SensorStateClass.TOTAL, "mdi:cash-plus"),
+}
+
+# (metric, period) pairs agreed for the fork
+FLOW_SENSORS = (
+    ("energy_bought", "daily"),
+    ("energy_sold", "daily"),
+    ("buy_cost", "daily"),
+    ("sell_revenue", "daily"),
+    ("sell_revenue", "monthly"),
+    ("sell_revenue", "yearly"),
+    ("energy_sold", "monthly"),
+    ("energy_sold", "yearly"),
+)
+
+
+def _pstryk_device_info(hass):
+    return {
+        "identifiers": {(DOMAIN, "pstryk_energy")},
+        "name": "Pstryk Energy",
+        "manufacturer": "Pstryk",
+        "model": "Energy Price Monitor",
+        "sw_version": get_integration_version(hass),
+    }
+
+
+def _period_start(period: str):
+    """Local start of the current day / month / year."""
+    start = dt_util.start_of_local_day()
+    if period == "monthly":
+        start = start.replace(day=1)
+    elif period == "yearly":
+        start = start.replace(month=1, day=1)
+    return start
+
+
+class PstrykFlowSensor(CoordinatorEntity, SensorEntity):
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: PstrykCostDataUpdateCoordinator,
+                 metric: str, period: str, entry_id: str):
+        super().__init__(coordinator)
+        self.metric = metric
+        self.period = period
+        self.entry_id = entry_id
+        (self._data_key, self._name_suffix, unit,
+         device_class, state_class, icon) = FLOW_METRICS[metric]
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_state_class = state_class
+        self._attr_icon = icon
+        self.entity_id = f"sensor.{DOMAIN}_{period}_{metric}"
+
+    @property
+    def name(self) -> str:
+        return f"Pstryk {self.period.title()} {self._name_suffix}"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{DOMAIN}_{self.metric}_{self.period}"
+
+    @property
+    def device_info(self):
+        return _pstryk_device_info(self.hass)
+
+    @property
+    def last_reset(self):
+        # Monetary TOTAL sensors restart every period; energy sensors use
+        # TOTAL_INCREASING and must not report last_reset.
+        if self._attr_state_class == SensorStateClass.TOTAL:
+            return _period_start(self.period)
+        return None
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        period_data = self.coordinator.data.get(self.period)
+        if not period_data or self._data_key not in period_data:
+            return None
+        value = period_data.get(self._data_key)
+        return round(value, 4) if isinstance(value, (int, float)) else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        attrs = {"Period": self.period}
+        attrs["Last updated"] = dt_util.now().strftime("%d.%m.%Y %H:%M:%S")
+        return attrs
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success and self.coordinator.data is not None
+
+
+def _sell_totals(coordinator, period):
+    """Real (revenue PLN, sold kWh) for a period, straight from Pstryk data.
+
+    daily/monthly/yearly: values the cost coordinator already fetched.
+    total: closed years from the sell history + current year live.
+    Returns None when the needed data is not loaded yet.
+    """
+    data = coordinator.data or {}
+    if period != "total":
+        period_data = data.get(period)
+        if not period_data:
+            return None
+        return (period_data.get("total_sold", 0) or 0,
+                period_data.get("rae_usage", 0) or 0)
+
+    per_year = _sell_per_year(coordinator)
+    if per_year is None:
+        return None
+    return (sum(y["sell_revenue"] for y in per_year.values()),
+            sum(y["energy_sold"] for y in per_year.values()))
+
+
+def _sell_per_year(coordinator):
+    """{year: {sell_revenue, energy_sold}}: past years from history, current live."""
+    history = coordinator.sell_history
+    yearly = (coordinator.data or {}).get("yearly")
+    if history is None or not yearly:
+        return None
+    current_year = str(dt_util.now().year)
+    result = {
+        year: dict(entry)
+        for year, entry in history["years"].items()
+        if year < current_year
+    }
+    result[current_year] = {
+        "sell_revenue": round(yearly.get("total_sold", 0) or 0, 2),
+        "energy_sold": round(yearly.get("rae_usage", 0) or 0, 3),
+    }
+    return result
+
+
+def _average_price(revenue, kwh):
+    """Weighted real average: revenue / kWh. None when nothing was sold."""
+    if not kwh or kwh <= 0:
+        return None
+    return round(revenue / kwh, 4)
+
+
+class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
+    """All-time sell revenue (PLN) or sold energy (kWh) since selling started."""
+
+    _attr_suggested_display_precision = 2
+
+    KINDS = {
+        # kind: (name, unique_id, unit, device class, state class, icon, index)
+        "sell_revenue": ("Pstryk Total Sell Revenue", f"{DOMAIN}_sell_revenue_total", "PLN",
+                         SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-multiple", 0),
+        "energy_sold": ("Pstryk Total Energy Sold", f"{DOMAIN}_energy_sold_total", "kWh",
+                        SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING,
+                        "mdi:transmission-tower-export", 1),
+    }
+
+    def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, kind: str, entry_id: str):
+        super().__init__(coordinator)
+        self.kind = kind
+        self.entry_id = entry_id
+        (self._name, self._unique_id, unit, device_class,
+         state_class, icon, self._index) = self.KINDS[kind]
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_state_class = state_class
+        self._attr_icon = icon
+        self.entity_id = f"sensor.{DOMAIN}_total_{kind}"
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def unique_id(self) -> str:
+        return self._unique_id
+
+    @property
+    def device_info(self):
+        return _pstryk_device_info(self.hass)
+
+    @property
+    def native_value(self):
+        totals = _sell_totals(self.coordinator, "total")
+        if totals is None:
+            return None
+        return round(totals[self._index], 3 if self.kind == "energy_sold" else 2)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        per_year = _sell_per_year(self.coordinator)
+        if per_year is None:
+            return {}
+        attrs = {year: entry[self.kind] for year, entry in per_year.items() if entry[self.kind]}
+        fetched_at = self.coordinator.sell_history.get("fetched_at")
+        if fetched_at:
+            attrs["History fetched"] = fetched_at.strftime("%d.%m.%Y %H:%M:%S")
+        attrs["Last updated"] = dt_util.now().strftime("%d.%m.%Y %H:%M:%S")
+        return attrs
+
+    @property
+    def available(self) -> bool:
+        return (self.coordinator.last_update_success
+                and self.coordinator.data is not None
+                and self.coordinator.sell_history is not None)
+
+
+class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
+    """Real weighted average sell price = sell revenue / sold kWh for a period."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "PLN/kWh"
+    _attr_suggested_display_precision = 4
+    _attr_icon = "mdi:cash-check"
+
+    def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, period: str, entry_id: str):
+        super().__init__(coordinator)
+        self.period = period
+        self.entry_id = entry_id
+        self.entity_id = f"sensor.{DOMAIN}_{period}_average_sell_price"
+
+    @property
+    def name(self) -> str:
+        return f"Pstryk {self.period.title()} Average Sell Price"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{DOMAIN}_average_sell_price_{self.period}"
+
+    @property
+    def device_info(self):
+        return _pstryk_device_info(self.hass)
+
+    @property
+    def native_value(self):
+        totals = _sell_totals(self.coordinator, self.period)
+        if totals is None:
+            return None
+        return _average_price(*totals)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        totals = _sell_totals(self.coordinator, self.period)
+        if totals is None:
+            return {}
+        attrs = {
+            "Period": self.period,
+            "Sell revenue": round(totals[0], 2),
+            "Energy sold": round(totals[1], 3),
+        }
+        if self.period == "total":
+            per_year = _sell_per_year(self.coordinator) or {}
+            for year, entry in per_year.items():
+                avg = _average_price(entry["sell_revenue"], entry["energy_sold"])
+                if avg is not None:
+                    attrs[year] = avg
+        attrs["Last updated"] = dt_util.now().strftime("%d.%m.%Y %H:%M:%S")
+        return attrs
+
+    @property
+    def available(self) -> bool:
+        if not (self.coordinator.last_update_success and self.coordinator.data is not None):
+            return False
+        if self.period == "total":
+            return self.coordinator.sell_history is not None
+        return True
