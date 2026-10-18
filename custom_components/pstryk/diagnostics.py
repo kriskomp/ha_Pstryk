@@ -98,21 +98,6 @@ async def async_get_config_entry_diagnostics(
 
     diagnostics_data["mqtt_integration_available"] = hass.services.has_service("mqtt", "publish")
     
-    for price_type in ("buy", "sell"):
-        for period in ("monthly", "yearly"):
-            entity_id = f"sensor.pstryk_{price_type}_{period}_average"
-            state = hass.states.get(entity_id)
-            
-            if state:
-                meter_data = {
-                    "state": state.state,
-                    "last_reset": state.attributes.get("Last reset", "Unknown"),
-                    "price_count": state.attributes.get("Price count", 0),
-                    "price_sum": state.attributes.get("Price sum", 0),
-                    "available": state.state not in ["unknown", "unavailable"],
-                }
-                diagnostics_data["utility_meters"][f"{price_type}_{period}_average"] = meter_data
-    
     for period in ("daily", "monthly", "yearly"):
         entity_id = f"sensor.pstryk_{period}_financial_balance"
         state = hass.states.get(entity_id)
