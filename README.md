@@ -23,33 +23,29 @@ To jest fork integracji [balgerion/ha_Pstryk](https://github.com/balgerion/ha_Ps
 | Składniki ceny w `sensor.pstryk_json_buy` / `_sell` | brak | `tge_price`, dystrybucja, opłata, VAT, akcyza (z [PR #29](https://github.com/balgerion/ha_Pstryk/pull/29) autorstwa mnarozny) |
 | Koszty, bilanse, średnie | co godzinę o :01 | co godzinę o :05:30 (dane godziny są w API do 3 min po jej końcu), po restarcie odtwarzane z pamięci |
 | Koszty po starcie Home Assistanta | pobierane przy każdym starcie (po ok. 15 s) | pobierane od razu tylko wtedy, gdy brak aktualnych danych (np. pierwsza instalacja); inaczej z pamięci, bez zapytania (patrz [Pierwsze uruchomienie](#pierwsze-uruchomienie)) |
-| Przepływy energii i pieniędzy | tylko w atrybutach bilansu | 17 osobnych encji: dzienne kupno/sprzedaż (kWh, PLN), sprzedaż miesięczna/roczna, sumy od 01.10.2024 i rzeczywista średnia cena sprzedaży – patrz [Encje przepływów i sprzedaży](#encje-przepływów-i-sprzedaży-fork-kriskompha_pstryk) |
+| Przepływy energii i pieniędzy | tylko w atrybutach bilansu | 13 nowych encji: dzienne kupno/sprzedaż (kWh, PLN), sprzedaż miesięczna/roczna (kWh, PLN), sumy od 01.10.2024 (kupno i sprzedaż, kWh i PLN) i średnia cena sprzedaży od początku – patrz [Encje przepływów i sprzedaży](#encje-przepływów-i-sprzedaży-fork-kriskompha_pstryk) |
 | Odświeżanie ręczne | brak | `button.pstryk_refresh_prices` (pilnuje limitu) i `sensor.pstryk_prices_fetched` |
-| Średnie ceny kupna/sprzedaży (6 encji) | są | **usunięte** – patrz [Encje usunięte względem oryginału](#encje-usunięte-względem-oryginału) |
+| Średnie ceny kupna/sprzedaży (6 encji) | wszystkie włączone | bez zmian w działaniu; domyślnie włączone tylko średnie sprzedaży miesięczna/roczna – patrz [Encje domyślnie wyłączone](#encje-domyślnie-wyłączone) |
+| Średnia cena sprzedaży od początku | brak | `sensor.pstryk_sell_total_average` (nazwa w stylu oryginału) |
 
-### Encje usunięte względem oryginału
+### Encje domyślnie wyłączone
 
-Te encje oryginał tworzył, a fork już ich nie dostarcza. Po instalacji forka zostają w Home Assistant jako **„Ta encja nie jest już dostarczana przez integrację”** (niedostępne) – usuń je ręcznie (instrukcja niżej). Ich dotychczasowa historia w bazie zostaje, dopóki nie wyczyści jej recorder.
+Wszystkie encje oryginału zostają. Cztery średnie są w forku **domyślnie wyłączone** – przy nowej instalacji nie pojawiają się jako aktywne, ale można je włączyć w każdej chwili:
 
-| Identyfikator encji | Nazwa w HA | Co pokazywała | Zamiennik w forku |
-|---|---|---|---|
-| `sensor.pstryk_buy_daily_average` | Pstryk Buy Daily Average | koszt zakupu ÷ kWh kupione, bieżący dzień (PLN/kWh) | brak – dane w `sensor.pstryk_daily_buy_cost` i `sensor.pstryk_daily_energy_bought` |
-| `sensor.pstryk_buy_monthly_average` | Pstryk Buy Monthly Average | jw., bieżący miesiąc | brak – dane w atrybutach `sensor.pstryk_monthly_financial_balance` (`Buy cost`, `Energy bought`) |
-| `sensor.pstryk_buy_yearly_average` | Pstryk Buy Yearly Average | jw., bieżący rok | brak – dane w atrybutach `sensor.pstryk_yearly_financial_balance` |
-| `sensor.pstryk_sell_daily_average` | Pstryk Sell Daily Average | przychód ze sprzedaży ÷ kWh sprzedane, bieżący dzień (PLN/kWh) | dane w `sensor.pstryk_daily_sell_revenue` i `sensor.pstryk_daily_energy_sold` |
-| `sensor.pstryk_sell_monthly_average` | Pstryk Sell Monthly Average | jw., bieżący miesiąc | `sensor.pstryk_monthly_average_sell_price` (ten sam wzór) |
-| `sensor.pstryk_sell_yearly_average` | Pstryk Sell Yearly Average | jw., bieżący rok | `sensor.pstryk_yearly_average_sell_price` (ten sam wzór) |
+| Identyfikator encji | Nazwa w HA | Co pokazuje |
+|---|---|---|
+| `sensor.pstryk_buy_daily_average` | Pstryk Buy Daily Average | koszt zakupu ÷ kWh kupione, bieżący dzień (PLN/kWh) |
+| `sensor.pstryk_buy_monthly_average` | Pstryk Buy Monthly Average | jw., bieżący miesiąc |
+| `sensor.pstryk_buy_yearly_average` | Pstryk Buy Yearly Average | jw., bieżący rok |
+| `sensor.pstryk_sell_daily_average` | Pstryk Sell Daily Average | przychód ze sprzedaży ÷ kWh sprzedane, bieżący dzień (PLN/kWh) |
 
-Uwaga: przy bardzo małym poborze z sieci (np. dom zasilany z magazynu energii) średnia zakupu za dzień bywa bardzo wysoka (np. 10 PLN/kWh) – to nie błąd, tylko koszt rozłożony na kilka Wh.
+Włączone zostają `sensor.pstryk_sell_monthly_average` i `sensor.pstryk_sell_yearly_average` – to rzeczywista średnia cena sprzedaży (przychód ÷ kWh) za miesiąc i rok; od początku sprzedaży: `sensor.pstryk_sell_total_average`.
 
-**Jak usunąć:**
-1. *Ustawienia → Urządzenia i usługi → zakładka Encje*.
-2. W wyszukiwarce wpisz `average`; w filtrach włącz pokazywanie encji niedostępnych.
-3. Zaznacz 6 encji z tabeli (identyfikatory kończą się na `_average`; **nie** zaznaczaj `*_average_sell_price` – to nowe encje forka).
-4. **Usuń wybrane** (ikona ⋮ lub przycisk na dole listy).
-5. Sprawdź karty i automatyzacje, które ich używały, i podmień je na zamienniki z tabeli.
+Średnie liczone są wprost z rozliczenia Pstryk (koszt ÷ kWh). Przy bardzo małym poborze z sieci (np. dom zasilany z magazynu energii) dzienna średnia zakupu bywa bardzo wysoka – to koszt dnia podzielony przez kilka Wh.
 
-**Uwaga przy przejściu z oryginału:** wyłącz automatyzacje, które co godzinę wywołują `homeassistant.update_entity` na sensorach Pstryk – każde takie wywołanie to zapytanie do API, które zabiera miejsce w limicie. Do ręcznego odświeżenia służy `button.pstryk_refresh_prices`.
+**Włączenie:** *Ustawienia → Urządzenia i usługi → Encje* → wyszukaj encję (w filtrach włącz pokazywanie wyłączonych) → otwórz → ⚙ Ustawienia → **Włączone** → Aktualizuj.
+
+**Przy przejściu z oryginału** Home Assistant zostawia te encje włączone (ustawienie domyślne dotyczy tylko nowo dodawanych encji). Żeby je wyłączyć: *Ustawienia → Urządzenia i usługi → Encje* → zaznacz encje z tabeli → ⋮ → **Wyłącz wybrane**.
 
 ## Status API
 
@@ -70,7 +66,8 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 - Konfiguracja z poziomu integracji  
 - Walidacja klucza API / Cache danych / Zabezpieczenie przed timeoutem API  
 - Integracja wystawia po lokalnym MQTT tablice cen w natywnym formacie EVCC  
-- Rzeczywista średnia cena sprzedaży – miesięczna/roczna/od początku (przychód ÷ kWh)  
+- Średnia zakupu oraz sprzedaży - miesięczna/roczna (w forku domyślnie włączone tylko średnie sprzedaży miesięczna/roczna)  
+- Średnia cena sprzedaży od początku sprzedaży (`sensor.pstryk_sell_total_average`)  
 - Bilans miesięczny/roczny  
 - Debug i logowanie  
 
@@ -119,6 +116,11 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 | `sensor.pstryk_daily_financial_balance` | Dzienny bilans kupna/sprzedaży               |
 | `sensor.pstryk_monthly_financial_balance`| Miesięczny bilans kupna/sprzedaży            |
 | `sensor.pstryk_yearly_financial_balance` | Roczny bilans kupna/sprzedaży                |
+| `sensor.pstryk_sell_monthly_average`    | Średnia miesięczna cena sprzedaży energii    |
+| `sensor.pstryk_sell_yearly_average`     | Średnia roczna cena sprzedaży energii        |
+| `sensor.pstryk_sell_total_average`      | Średnia cena sprzedaży od 01.10.2024 (fork)  |
+| `sensor.pstryk_buy_daily_average`, `_monthly_`, `_yearly_` | Średnia cena kupna (domyślnie wyłączone) |
+| `sensor.pstryk_sell_daily_average`      | Średnia dzienna cena sprzedaży (domyślnie wyłączona) |
 | `sensor.pstryk_json_buy`                | Ceny kupna 48h w formacie JSON (opcjonalny)  |
 | `sensor.pstryk_json_sell`               | Ceny sprzedaży 48h w formacie JSON (opcjonalny) |
 | `sensor.pstryk_prices_fetched`          | Czas pobrania z API cen, które są teraz w użyciu |
@@ -131,9 +133,9 @@ Wszystkie wartości pochodzą z danych rozliczeniowych Pstryk (`unified-metrics`
 | Okres | Energia kupiona (kWh) | Koszt zakupu (PLN) | Energia sprzedana (kWh) | Przychód ze sprzedaży (PLN) | Średnia cena sprzedaży (PLN/kWh) |
 |---|---|---|---|---|---|
 | Dzień | `sensor.pstryk_daily_energy_bought` | `sensor.pstryk_daily_buy_cost` | `sensor.pstryk_daily_energy_sold` | `sensor.pstryk_daily_sell_revenue` | – |
-| Miesiąc | – | – | `sensor.pstryk_monthly_energy_sold` | `sensor.pstryk_monthly_sell_revenue` | `sensor.pstryk_monthly_average_sell_price` |
-| Rok | – | – | `sensor.pstryk_yearly_energy_sold` | `sensor.pstryk_yearly_sell_revenue` | `sensor.pstryk_yearly_average_sell_price` |
-| Całość | `sensor.pstryk_total_energy_bought` | `sensor.pstryk_total_buy_cost` | `sensor.pstryk_total_energy_sold` | `sensor.pstryk_total_sell_revenue` | `sensor.pstryk_total_average_sell_price` |
+| Miesiąc | – | – | `sensor.pstryk_monthly_energy_sold` | `sensor.pstryk_monthly_sell_revenue` | `sensor.pstryk_sell_monthly_average` (oryginał) |
+| Rok | – | – | `sensor.pstryk_yearly_energy_sold` | `sensor.pstryk_yearly_sell_revenue` | `sensor.pstryk_sell_yearly_average` (oryginał) |
+| Całość | `sensor.pstryk_total_energy_bought` | `sensor.pstryk_total_buy_cost` | `sensor.pstryk_total_energy_sold` | `sensor.pstryk_total_sell_revenue` | `sensor.pstryk_sell_total_average` |
 
 - **Całość** liczona jest od 01.10.2024 (start Pstryk); miesiące sprzed umowy API zwraca jako zera. Atrybuty sensorów `total` zawierają rozbicie per rok.
 - **Średnia cena sprzedaży** = przychód ÷ kWh sprzedane w tym samym okresie (średnia ważona, rzeczywista). Gdy nic nie sprzedano, sensor nie ma wartości.

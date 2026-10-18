@@ -94,7 +94,7 @@ class _Store:
 
 
 class _RestoreEntity:
-    """Stand-in for RestoreEntity (the fork no longer uses it; kept for the stubs)."""
+    """What PstrykAveragePriceSensor uses of an entity; `last_state` is set by the test."""
 
     last_state = None
     writes = 0
@@ -778,6 +778,31 @@ def test_cost_data_of_another_entry_is_not_restored(mods, env):
     assert restarted.last_update_success is False
 
 
+def _average(mods, cost, coords, period, last_state=None):
+    sensor = mods.sensor.PstrykAveragePriceSensor(cost, coords["buy"], period, "e")
+    sensor.last_state = last_state
+    _run(sensor.async_added_to_hass())
+    return sensor
+
+
+def test_averages_after_midnight_use_only_their_own_period(mods, env):
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 3, 0, 5)))
+    yesterday = types.SimpleNamespace(state="1.5", attributes={})
+    daily = _average(mods, restarted, coords, "daily", yesterday)
+    monthly = _average(mods, restarted, coords, "monthly", yesterday)
+    assert sorted(restarted.data) == ["history", "monthly", "yearly"]  # history kept within its year
+    assert daily.available is False  # yesterday's 1.5 is not shown as today's
+    assert monthly.available is True
+    assert monthly.native_value == 2.0  # from the restored month, not the entity's 1.5
+
+
+def test_averages_without_entity_state_come_from_restored_cost(mods, env):
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
+    daily = _average(mods, restarted, coords, "daily")
+    assert daily.available is True
+    assert daily.native_value == 2.0
+
+
 @pytest.mark.parametrize("now, periods", [
     ((2026, 10, 2, 23, 59), ["daily", "monthly", "yearly"]),
     ((2026, 10, 3, 0, 5), ["monthly", "yearly"]),
@@ -1413,3 +1438,34 @@ def test_fork_budget_refusal_is_not_logged_as_a_warning(mods, env, caplog):
     cost_records = [r for r in caplog.records if r.name.endswith("energy_cost_coordinator")]
     assert not [r for r in cost_records if r.levelno >= logging.WARNING]
     assert any("waits for the API limit" in r.getMessage() for r in cost_records)
+
+
+def test_fork_average_sensors_enabled_by_default_only_for_sell_monthly_yearly(mods, env):
+    async def scenario():
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        return {
+            mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e").entity_id:
+                mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e")._attr_entity_registry_enabled_default
+            for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")
+        }
+
+    assert _run(scenario()) == {
+        "sensor.pstryk_buy_daily_average": False,
+        "sensor.pstryk_buy_monthly_average": False,
+        "sensor.pstryk_buy_yearly_average": False,
+        "sensor.pstryk_sell_daily_average": False,
+        "sensor.pstryk_sell_monthly_average": True,
+        "sensor.pstryk_sell_yearly_average": True,
+    }
+
+
+def test_fork_total_sell_average_is_named_like_the_original_averages(mods, env):
+    async def scenario():
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        s = mods.sensor.PstrykAverageSellPriceSensor(cost, "total", "e")
+        return s.entity_id, s.name, s.unique_id
+
+    assert _run(scenario()) == ("sensor.pstryk_sell_total_average", "Pstryk Sell Total Average",
+                                "pstryk_sell_total_average")

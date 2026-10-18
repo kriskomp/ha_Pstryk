@@ -5,6 +5,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 from .update_coordinator import PstrykDataUpdateCoordinator, is_likely_placeholder_data
 from .energy_cost_coordinator import PstrykCostDataUpdateCoordinator
@@ -161,8 +162,17 @@ async def async_setup_entry(
 
     remaining_entities = []
 
-    # Fork: the buy/sell daily/monthly/yearly average price sensors of the original
-    # were removed (README: "Encje usunięte względem oryginału").
+    if buy_coord:
+        for period in ("daily", "monthly", "yearly"):
+            remaining_entities.append(PstrykAveragePriceSensor(
+                cost_coordinator, buy_coord, period, entry.entry_id
+            ))
+
+    if sell_coord:
+        for period in ("daily", "monthly", "yearly"):
+            remaining_entities.append(PstrykAveragePriceSensor(
+                cost_coordinator, sell_coord, period, entry.entry_id
+            ))
 
     for period in ("daily", "monthly", "yearly"):
         remaining_entities.append(PstrykFinancialBalanceSensor(
@@ -175,8 +185,8 @@ async def async_setup_entry(
         ))
     for kind in ("sell_revenue", "energy_sold", "buy_cost", "energy_bought"):
         remaining_entities.append(PstrykTotalSellSensor(cost_coordinator, kind, entry.entry_id))
-    for period in ("monthly", "yearly", "total"):
-        remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, period, entry.entry_id))
+    # Monthly/yearly: the original sell averages above (same formula).
+    remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, "total", entry.entry_id))
 
     _LOGGER.info("Registering %d current price sensors with data and %d additional sensors as unavailable",
                  len(entities), len(remaining_entities))
@@ -676,6 +686,156 @@ class PstrykJsonPriceSensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.last_update_success and self.coordinator.data is not None
 
 
+class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    
+    def __init__(self, cost_coordinator: PstrykCostDataUpdateCoordinator, 
+                 price_coordinator: PstrykDataUpdateCoordinator,
+                 period: str, entry_id: str):
+        self.cost_coordinator = cost_coordinator
+        self.price_coordinator = price_coordinator
+        self.price_type = price_coordinator.price_type
+        self.period = period
+        self.entry_id = entry_id
+        self.entity_id = f"sensor.{DOMAIN}_{self.price_type}_{period}_average"
+        # Fork: only the sell monthly/yearly averages (the real average sell
+        # price) are enabled by default; the others can be enabled by the user.
+        self._attr_entity_registry_enabled_default = (
+            self.price_type == "sell" and period in ("monthly", "yearly")
+        )
+        self._state = None
+        self._energy_bought = 0.0
+        self._energy_sold = 0.0
+        self._total_cost = 0.0
+        self._total_revenue = 0.0
+        
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        
+        self.async_on_remove(
+            self.cost_coordinator.async_add_listener(self._handle_cost_update)
+        )
+        
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            try:
+                self._state = float(last_state.state)
+                
+                if last_state.attributes:
+                    self._energy_bought = float(last_state.attributes.get("energy_bought", 0))
+                    self._energy_sold = float(last_state.attributes.get("energy_sold", 0))
+                    self._total_cost = float(last_state.attributes.get("total_cost", 0))
+                    self._total_revenue = float(last_state.attributes.get("total_revenue", 0))
+                        
+                _LOGGER.debug("Restored weighted average for %s %s: %s", 
+                            self.price_type, self.period, self._state)
+            except (ValueError, TypeError):
+                _LOGGER.warning("Could not restore state for %s", self.name)
+
+        # Cost data restored at start-up is newer than the entity's own state.
+        self._update_from_cost()
+
+    @property
+    def name(self) -> str:
+        period_name = self.period.title()
+        return f"Pstryk {self.price_type.title()} {period_name} Average"
+        
+    @property
+    def unique_id(self) -> str:
+        return f"{DOMAIN}_{self.price_type}_{self.period}_average"
+        
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, "pstryk_energy")},
+            "name": "Pstryk Energy",
+            "manufacturer": "Pstryk",
+            "model": "Energy Price Monitor",
+            "sw_version": get_integration_version(self.hass),
+        }
+        
+    @property
+    def native_value(self):
+        return self._state
+        
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return "PLN/kWh"
+        
+    @property
+    def extra_state_attributes(self) -> dict:
+        period_key = "Period"
+        calculation_method_key = "Calculation method"
+        energy_bought_key = "Energy bought"
+        energy_sold_key = "Energy sold"
+        total_cost_key = "Total cost"
+        total_revenue_key = "Total revenue"
+        attrs = {
+            period_key: self.period,
+            calculation_method_key: "Weighted average",
+        }
+        
+        if self.price_type == "buy" and self._energy_bought > 0:
+            attrs[energy_bought_key] = round(self._energy_bought, 2)
+            attrs[total_cost_key] = round(self._total_cost, 2)
+        elif self.price_type == "sell" and self._energy_sold > 0:
+            attrs[energy_sold_key] = round(self._energy_sold, 2)
+            attrs[total_revenue_key] = round(self._total_revenue, 2)
+            
+        last_updated_key = "Last updated"
+        now = dt_util.now()
+        attrs[last_updated_key] = now.strftime("%Y-%m-%d %H:%M:%S")
+        
+        return attrs
+        
+    @callback
+    def _handle_cost_update(self) -> None:
+        if self._update_from_cost():
+            self.async_write_ha_state()
+
+    def _period_data(self):
+        if not self.cost_coordinator or not self.cost_coordinator.data:
+            return None
+        return self.cost_coordinator.data.get(self.period)
+
+    def _update_from_cost(self) -> bool:
+        period_data = self._period_data()
+        if not period_data:
+            return False
+
+        if self.price_type == "buy":
+            total_cost = abs(period_data.get("total_cost", 0))
+            energy_bought = period_data.get("fae_usage", 0)
+            
+            if energy_bought > 0:
+                self._state = round(total_cost / energy_bought, 4)
+                self._energy_bought = energy_bought
+                self._total_cost = total_cost
+            else:
+                self._state = None
+                
+        elif self.price_type == "sell":
+            total_revenue = period_data.get("total_sold", 0)
+            energy_sold = period_data.get("rae_usage", 0)
+            
+            if energy_sold > 0:
+                self._state = round(total_revenue / energy_sold, 4)
+                self._energy_sold = energy_sold
+                self._total_revenue = total_revenue
+            else:
+                self._state = None
+
+        return True
+
+    @property
+    def available(self) -> bool:
+        # Its own period only: after midnight a restored month must not make
+        # yesterday's daily average look current.
+        return (self.cost_coordinator is not None and
+                self.cost_coordinator.last_update_success and
+                bool(self._period_data()))
+
+
 class PstrykFinancialBalanceSensor(CoordinatorEntity, SensorEntity):
     _attr_state_class = SensorStateClass.TOTAL
     _attr_device_class = SensorDeviceClass.MONETARY
@@ -1074,15 +1234,16 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.period = period
         self.entry_id = entry_id
-        self.entity_id = f"sensor.{DOMAIN}_{period}_average_sell_price"
+        # Named like the original averages: sensor.pstryk_sell_total_average.
+        self.entity_id = f"sensor.{DOMAIN}_sell_{period}_average"
 
     @property
     def name(self) -> str:
-        return f"Pstryk {self.period.title()} Average Sell Price"
+        return f"Pstryk Sell {self.period.title()} Average"
 
     @property
     def unique_id(self) -> str:
-        return f"{DOMAIN}_average_sell_price_{self.period}"
+        return f"{DOMAIN}_sell_{self.period}_average"
 
     @property
     def device_info(self):
