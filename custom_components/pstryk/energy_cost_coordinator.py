@@ -13,7 +13,7 @@ from .const import (
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_DELAY
 )
-from .api_client import BudgetExhausted, PstrykAPIClient
+from .api_client import BudgetExhausted, ClientClosed, PstrykAPIClient
 from .price_policy import (
     COST_KEEP_FREE,
     cost_keep_free,
@@ -32,8 +32,9 @@ PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "yearly": "%Y", "hist
 # The two cost requests and the periods each one feeds. "month" goes first: it
 # feeds three periods and every total sensor, so it gets a lone free slot.
 COST_PARTS = {"month": ("monthly", "yearly", "history"), "day": ("daily",)}
-# A catch-up waits this long after the slot it needs frees.
-CATCH_UP_MARGIN = timedelta(seconds=3)
+# A catch-up waits this long after the slot it needs frees: longer than a
+# waiting price fetch (slot + 5 s), so prices get the slot first.
+CATCH_UP_MARGIN = timedelta(seconds=10)
 
 
 def restorable_periods(saved, now):
@@ -113,6 +114,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                         base_delay=self.retry_delay,
                         keep_free=self._keep_free
                     )
+                except ClientClosed:
+                    raise  # the entry was unloaded: stop quietly
                 except BudgetExhausted as e:
                     self._blocked[part] = e.free_at
                     _LOGGER.info("Cost data (%s) waits for the API limit: %s", part, e)
@@ -158,7 +161,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 raise BudgetExhausted("unified-metrics", free_at)
             raise UpdateFailed("Failed to fetch energy cost data for any resolution")
 
-        except BudgetExhausted:
+        except (BudgetExhausted, ClientClosed):
             raise
         except Exception as err:
             _LOGGER.error("Error fetching energy cost data: %s", err, exc_info=True)
@@ -436,9 +439,13 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_run(self, parts, keep_free, reason) -> str:
         """One cost fetch of `parts`; then a catch-up for parts still missing."""
+        if self.api_client.closed:
+            return "stopped"
         self._keep_free = keep_free
         try:
             data = await self._async_update_data(parts)
+        except ClientClosed:
+            return "stopped"
         except BudgetExhausted:
             data = {}
         except Exception as err:
@@ -457,6 +464,14 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             return "budget"
         return "partial" if self._blocked else "fetched"
 
+    def async_shutdown_timers(self):
+        """Cancel the hourly run and a pending catch-up (entry unload/reload)."""
+        for attr in ("_unsub_hourly", "_unsub_midnight", "_unsub_catch_up"):
+            unsub = getattr(self, attr, None)
+            if unsub:
+                unsub()
+                setattr(self, attr, None)
+
     def _cancel_catch_up(self):
         if self._unsub_catch_up:
             self._unsub_catch_up()
@@ -470,6 +485,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         catch-ups never become an hourly habit that eats the next run's slots.
         """
         self._cancel_catch_up()
+        if self.api_client.closed:
+            return
         now = dt_util.now()
         waiting = [p for p in self.missing_parts(now) if self._blocked.get(p)]
         if not waiting:
@@ -489,7 +506,10 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         if not parts:
             return
         tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
-        await self._async_run(parts, cost_keep_free(now, tomorrow), "catch-up")
+        keep_free = cost_keep_free(now, tomorrow)
+        if any(getattr(c, "_unsub_budget_retry", None) for c in self.price_coordinators):
+            keep_free = max(keep_free, 1)  # a price fetch is waiting too: prices first
+        await self._async_run(parts, keep_free, "catch-up")
 
     def _block_all_until_free(self, keep_free):
         free_at = self.api_client.budget_free_at(keep_free=keep_free)

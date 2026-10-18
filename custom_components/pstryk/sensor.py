@@ -9,7 +9,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 from .update_coordinator import PstrykDataUpdateCoordinator, is_likely_placeholder_data
 from .energy_cost_coordinator import PstrykCostDataUpdateCoordinator
-from .api_client import PstrykAPIClient
+from .api_client import BudgetExhausted, PstrykAPIClient
 from .tomorrow_poll import PstrykTomorrowPoller
 from .const import (
     DOMAIN,
@@ -105,6 +105,12 @@ async def async_setup_entry(
             _LOGGER.debug("Successfully initialized %s coordinator (cached: %s, tomorrow: %s)",
                           coord_type, coord.data.get("is_cached", False), coord._has_tomorrow)
             return True
+        except BudgetExhausted as err:
+            # A full API limit is not an error: the fetch is already booked for
+            # when a slot frees (logged as info by the coordinator).
+            _LOGGER.debug("Initial %s price fetch waits for the API limit: %s", coord_type, err)
+            coord.last_update_success = False
+            return None
         except Exception as err:
             _LOGGER.error("Failed initial fetch for %s coordinator: %s", coord_type, err)
             coord.last_update_success = False

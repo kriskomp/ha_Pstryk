@@ -7,7 +7,7 @@ Użyj mojego kodu 1ML2X7 w koszyku w aplikacji. Bonus trafi do Twojego Portfela 
 !!! Dedykowana Karta do integracji (autora oryginału):
 https://github.com/balgerion/ha_Pstryk_card
 
-[![Wersja](https://img.shields.io/badge/wersja-2.2.3-blue)](https://github.com/kriskomp/ha_Pstryk/)
+[![Wersja](https://img.shields.io/badge/wersja-2.2.4-blue)](https://github.com/kriskomp/ha_Pstryk/)
 
 Integracja dla Home Assistant umożliwiająca śledzenie aktualnych cen energii elektrycznej oraz prognoz z platformy Pstryk.
 
@@ -161,7 +161,8 @@ Wszystkie wartości pochodzą z danych rozliczeniowych Pstryk (`unified-metrics`
 
 Pstryk pozwala na 3 zapytania na godzinę na endpoint ([regulamin API](https://pstryk.pl/regulaminy?doc=regulamin-api)). Ceny i koszty korzystają z tego samego endpointu `unified-metrics`, więc integracja liczy każde wysłane zapytanie (także ponowienia i sprawdzenie klucza API przy konfiguracji) w jednym limicie z ostatnich 60 minut. Gdy limit jest wykorzystany, zapytanie nie jest wysyłane. Historia zapytań jest zapisywana, więc restart Home Assistanta jej nie zeruje. Wyjątek: po nagłym zatrzymaniu Home Assistanta (awaria, zanik zasilania) tuż po wysłaniu zapytania zapisany czas może być o kilka sekund wcześniejszy od rzeczywistego, więc na granicy godziny może wyjść czwarte zapytanie.
 
-- **Ceny mają pierwszeństwo.** Pobranie cen może użyć każdego wolnego zapytania. Przy wykorzystanym limicie sensory cen zostają przy dotychczasowych danych, a pobranie rusza, gdy zwolni się miejsce.
+- **Ceny mają pierwszeństwo.** Pobranie cen może użyć każdego wolnego zapytania. Przy wykorzystanym limicie sensory cen zostają przy dotychczasowych danych, a pobranie rusza, gdy zwolni się miejsce – w dzienniku jest wtedy wpis informacyjny (nie błąd): `Buy prices wait for the API limit; fetching at HH:MM:SS`. Gdy ceny i koszty czekają na to samo miejsce, pierwsze idą ceny.
+- **Zmiana czasu:** harmonogram liczony jest w czasie UTC, więc w dniu zmiany czasu żadna godzina (także powtórzona 02:00–03:00) nie jest pomijana ani dublowana.
 - **Jeden rytm co godzinę o :05:** najpierw ceny (o :05:00, tylko gdy są potrzebne), potem koszty (o :05:30). Pstryk udostępnia dane zamkniętej godziny do 3 minut po jej końcu, a godzina w trakcie nie ma jeszcze danych.
 - **Ceny na jutro** są sprawdzane o 12:05, 12:25, 12:45 i dalej co 20 minut, aż się pojawią. Jedno sprawdzenie to jedno zapytanie dla kupna i sprzedaży, bez ponowień. Działa to w każdym trybie i zastępuje sprawdzanie między 14:00 a 15:00.
 - **O 00:05** odświeżane są ceny na nowy dzień (są już w pamięci jako wczorajsze „ceny na jutro”; nieudane odświeżenie ich nie kasuje).

@@ -2,7 +2,7 @@
 
 Pure functions with no Home Assistant imports. Times are local (Europe/Warsaw).
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Pstryk publishes tomorrow's prices shortly after 12:00 (seen 2026-10-01 to
 # 10-04; on 10-04 the API still had none at 12:00:04).
@@ -79,13 +79,16 @@ def next_tomorrow_check(now: datetime) -> datetime:
 
 
 def next_cost_run(now: datetime) -> datetime:
-    """The next :05:30 strictly after `now`."""
-    run = now.replace(minute=COST_RUN_MINUTE, second=COST_RUN_SECOND, microsecond=0)
-    if run <= now:
-        run = (now + timedelta(hours=1)).replace(
-            minute=COST_RUN_MINUTE, second=COST_RUN_SECOND, microsecond=0
-        )
-    return run
+    """The next :05:30 strictly after `now`, in `now`'s time zone.
+
+    Counted in UTC: on the day clocks go back, local wall time would skip the
+    repeated hour (Poland's offsets are whole hours, so :05:30 is the same).
+    """
+    now_utc = now.astimezone(timezone.utc)
+    run = now_utc.replace(minute=COST_RUN_MINUTE, second=COST_RUN_SECOND, microsecond=0)
+    if run <= now_utc:
+        run += timedelta(hours=1)
+    return run.astimezone(now.tzinfo)
 
 
 def cost_run_allowed(now: datetime, has_tomorrow: bool) -> bool:

@@ -155,12 +155,9 @@ async def _cleanup_coordinators(hass: HomeAssistant, entry: ConfigEntry) -> None
     cost_coordinator = hass.data[DOMAIN].get(cost_key)
     if cost_coordinator:
         _LOGGER.debug("Cleaning up cost coordinator for entry %s", entry.entry_id)
-        if hasattr(cost_coordinator, '_unsub_hourly') and cost_coordinator._unsub_hourly:
-            cost_coordinator._unsub_hourly()
-            cost_coordinator._unsub_hourly = None
-        if hasattr(cost_coordinator, '_unsub_midnight') and cost_coordinator._unsub_midnight:
-            cost_coordinator._unsub_midnight()
-            cost_coordinator._unsub_midnight = None
+        # Hourly run and a pending catch-up (fork); timers of a reloaded entry
+        # must not fire on its closed API client.
+        cost_coordinator.async_shutdown_timers()
         hass.data[DOMAIN].pop(cost_key, None)
     
     hass.data[DOMAIN].pop(f"{entry.entry_id}_mqtt_48h_mode", None)

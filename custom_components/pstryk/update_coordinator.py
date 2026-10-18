@@ -284,7 +284,7 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
         if self.api_client.closed:
             return
         retry_at = (free_at or dt_util.utcnow() + timedelta(minutes=5)) + timedelta(seconds=5)
-        _LOGGER.info("Retrying %s price fetch at %s", self.price_type,
+        _LOGGER.info("%s prices wait for the API limit; fetching at %s", self.price_type.title(),
                      dt_util.as_local(retry_at).strftime("%H:%M:%S"))
 
         async def _retry(_):
@@ -401,12 +401,14 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
             self._unsub_hourly()
             self._unsub_hourly = None
 
-        now = dt_util.now()
+        # In UTC: on the day clocks go back, local wall time would skip the
+        # repeated hour (and its price); Poland's offsets are whole hours.
+        now = dt_util.utcnow()
         next_run = (now.replace(minute=0, second=0, microsecond=0)
                     + timedelta(hours=1, seconds=5))
 
         _LOGGER.debug("Scheduling next hourly update for %s at %s",
-                     self.price_type, next_run.strftime("%Y-%m-%d %H:%M:%S"))
+                     self.price_type, dt_util.as_local(next_run).strftime("%Y-%m-%d %H:%M:%S"))
 
         self._unsub_hourly = async_track_point_in_time(
             self.hass, self._handle_hourly_update, dt_util.as_utc(next_run)
