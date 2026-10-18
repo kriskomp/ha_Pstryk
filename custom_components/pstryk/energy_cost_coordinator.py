@@ -538,22 +538,3 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             await self._async_run(tuple(COST_PARTS), keep_free, "hourly")
         finally:
             self.schedule_hourly_update()
-            return
-        self._keep_free = cost_keep_free(local_now, tomorrow)
-        if not self.api_client.budget_room_soon(keep_free=self._keep_free):
-            _LOGGER.debug("Skipping cost update at %s: API budget kept for prices", local_now.strftime("%H:%M"))
-            self.schedule_hourly_update()
-            return
-
-        _LOGGER.debug("Triggering cost update")
-        try:
-            data = await self._async_update_data()
-            self.data = {**(self.data or {}), **data}
-            self.last_update_success = True
-            self.async_update_listeners()
-            await self._async_save(data)
-        except Exception as err:
-            _LOGGER.error("Hourly cost update failed: %s - will retry next hour", err)
-            self.last_update_success = False
-        finally:
-            self.schedule_hourly_update()
