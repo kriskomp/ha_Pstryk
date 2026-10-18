@@ -59,37 +59,58 @@ def test_tomorrow_fetch_due(has_tomorrow, now, expected):
     assert price_policy.tomorrow_fetch_due(has_tomorrow, now) is expected
 
 
+# Fork kriskomp/ha_Pstryk: one hourly rhythm at :05 (prices :05:00, cost :05:30).
 @pytest.mark.parametrize(
     "now, expected",
     [
-        (_local(2026, 10, 4, 9, 0), _local(2026, 10, 4, 9, 50)),
-        (_local(2026, 10, 4, 9, 49, 59), _local(2026, 10, 4, 9, 50)),
-        (_local(2026, 10, 4, 9, 50), _local(2026, 10, 4, 10, 50)),
-        (_local(2026, 10, 4, 23, 55), _local(2026, 10, 5, 0, 50)),
+        (_local(2026, 10, 4, 9, 0), _local(2026, 10, 4, 9, 5, 30)),
+        (_local(2026, 10, 4, 9, 5, 29), _local(2026, 10, 4, 9, 5, 30)),
+        (_local(2026, 10, 4, 9, 5, 30), _local(2026, 10, 4, 10, 5, 30)),
+        (_local(2026, 10, 4, 23, 55), _local(2026, 10, 5, 0, 5, 30)),
     ],
 )
 def test_next_cost_run(now, expected):
     assert price_policy.next_cost_run(now) == expected
 
 
-def test_cost_waits_for_tomorrows_prices():
+def test_cost_runs_every_hour_but_waits_for_tomorrows_prices():
     def skipped(has_tomorrow):
-        return [h for h in range(24) if not price_policy.cost_run_allowed(_local(2026, 10, 4, h, 50), has_tomorrow)]
+        return [h for h in range(24) if not price_policy.cost_run_allowed(_local(2026, 10, 4, h, 5, 30), has_tomorrow)]
 
-    assert skipped(True) == [11, 23]
-    assert skipped(False) == [11] + list(range(12, 24))
+    assert skipped(True) == []
+    assert skipped(False) == list(range(12, 24))
+
+
+def test_cost_keeps_a_slot_only_before_a_price_request():
+    def keeping(has_tomorrow):
+        return [h for h in range(24) if price_policy.cost_keep_free(_local(2026, 10, 4, h, 5, 30), has_tomorrow)]
+
+    assert keeping(True) == [23]  # the 00:05 refresh
+    assert keeping(False) == list(range(11, 24))  # the checks from 12:05
 
 
 @pytest.mark.parametrize(
     "now, expected",
     [
-        (_local(2026, 10, 4, 0, 1), _local(2026, 10, 4, 12, 10)),
-        (_local(2026, 10, 4, 12, 0, 4), _local(2026, 10, 4, 12, 10)),
-        (_local(2026, 10, 4, 12, 10, 0, 5000), _local(2026, 10, 4, 12, 30)),
-        (_local(2026, 10, 4, 12, 31), _local(2026, 10, 4, 12, 50)),
-        (_local(2026, 10, 4, 12, 50, 1), _local(2026, 10, 4, 13, 10)),
-        (_local(2026, 10, 4, 23, 30, 1), _local(2026, 10, 4, 23, 50)),
-        (_local(2026, 10, 4, 23, 50, 1), _local(2026, 10, 5, 12, 10)),
+        (_local(2026, 10, 4, 0, 1), _local(2026, 10, 4, 0, 5)),
+        (_local(2026, 10, 4, 0, 5), _local(2026, 10, 5, 0, 5)),
+        (_local(2026, 10, 4, 23, 59), _local(2026, 10, 5, 0, 5)),
+    ],
+)
+def test_next_midnight_refresh(now, expected):
+    assert price_policy.next_midnight_refresh(now) == expected
+
+
+@pytest.mark.parametrize(
+    "now, expected",
+    [
+        (_local(2026, 10, 4, 0, 1), _local(2026, 10, 4, 12, 5)),
+        (_local(2026, 10, 4, 12, 0, 4), _local(2026, 10, 4, 12, 5)),
+        (_local(2026, 10, 4, 12, 5, 0, 5000), _local(2026, 10, 4, 12, 25)),
+        (_local(2026, 10, 4, 12, 26), _local(2026, 10, 4, 12, 45)),
+        (_local(2026, 10, 4, 12, 45, 1), _local(2026, 10, 4, 13, 5)),
+        (_local(2026, 10, 4, 23, 25, 1), _local(2026, 10, 4, 23, 45)),
+        (_local(2026, 10, 4, 23, 45, 1), _local(2026, 10, 5, 12, 5)),
     ],
 )
 def test_next_tomorrow_check(now, expected):
@@ -103,11 +124,11 @@ def test_tomorrow_checks_fit_the_hourly_budget():
         if now.day != 4:
             break
         checks.append(now)
-    assert checks[:3] == [_local(2026, 10, 4, 12, m) for m in (10, 30, 50)]
+    assert checks[:3] == [_local(2026, 10, 4, 12, m) for m in (5, 25, 45)]
     assert max(sum(1 for c in checks if s <= c < s + timedelta(hours=1)) for s in checks) == 3
 
 
 def test_dst_change_keeps_local_check_times():
     nxt = price_policy.next_tomorrow_check(_local(2026, 10, 24, 23, 55))
-    assert (nxt.day, nxt.hour, nxt.minute) == (25, 12, 10)
+    assert (nxt.day, nxt.hour, nxt.minute) == (25, 12, 5)
     assert nxt.utcoffset().total_seconds() == 3600

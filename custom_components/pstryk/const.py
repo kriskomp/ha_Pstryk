@@ -11,7 +11,7 @@ API_WINDOW_MARGIN_SECONDS = 2
 # A request that finds the budget full waits this long for a slot to free.
 # Checks repeat on the hour, so last hour's request leaves the window a moment
 # after the timer fires; each hour on the limit starts the margin later, and
-# 30 s covers the longest run (12:10 to 23:50).
+# 30 s covers the longest run (12:05 to 23:45).
 API_SLOT_WAIT_SECONDS = 30
 
 PRICING_ENDPOINT = (

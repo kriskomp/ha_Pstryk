@@ -8,17 +8,28 @@ from datetime import datetime, timedelta
 # 10-04; on 10-04 the API still had none at 12:00:04).
 TOMORROW_EXPECTED_FROM = (12, 5)
 
-# Checks for tomorrow's prices: 12:10, 12:30, 12:50, ... every 20 minutes until
-# they are in. Three per hour is the whole hourly budget, so cost waits.
-TOMORROW_FIRST_CHECK = (12, 10)
-TOMORROW_INTERVAL_MINUTES = 20
-TOMORROW_LAST_CHECK = (23, 50)
+# One hourly rhythm at :05 (fork kriskomp/ha_Pstryk). Pstryk serves a closed
+# hour's meter data within 3 minutes of its end (measured 2026-10-18: hour
+# 23:00 empty at 00:00:15, filled at 00:03:03); a running hour stays empty.
+# Prices go first at :05:00 when they are needed, cost follows at :05:30.
 
-# Cost runs at :50 only on budget the prices leave free: never while tomorrow's
-# prices are missing after 12:00, never at 11:50 (its requests would still count
-# against the 12:10-12:50 checks) or 23:50 (the 00:01 fetch).
-COST_RUN_MINUTE = 50
-COST_SKIP_HOURS = frozenset({11, 23})
+# Checks for tomorrow's prices: 12:05, 12:25, 12:45, ... every 20 minutes until
+# they are in. Three per hour is the whole hourly budget, so cost waits.
+TOMORROW_FIRST_CHECK = (12, 5)
+TOMORROW_INTERVAL_MINUTES = 20
+TOMORROW_LAST_CHECK = (23, 45)
+
+# Midnight price refresh at 00:05, in the same rhythm (was 00:01).
+MIDNIGHT_REFRESH = (0, 5)
+
+# Cost runs every hour at :05:30, after the price requests of :05:00. It waits
+# while tomorrow's prices are missing after 12:00. Its last-hour slots free at
+# the next :05:32, so a price request at the next :05:00 still finds room as
+# long as cost leaves one slot free: it does so in the hours before a price
+# request is due (23: the 00:05 refresh; 11 and later without tomorrow's
+# prices: the checks from 12:05). Otherwise cost may use the whole budget.
+COST_RUN_MINUTE = 5
+COST_RUN_SECOND = 30
 COST_KEEP_FREE = 1
 
 
@@ -63,14 +74,31 @@ def next_tomorrow_check(now: datetime) -> datetime:
 
 
 def next_cost_run(now: datetime) -> datetime:
-    """The next :50 strictly after `now`."""
-    run = now.replace(minute=COST_RUN_MINUTE, second=0, microsecond=0)
+    """The next :05:30 strictly after `now`."""
+    run = now.replace(minute=COST_RUN_MINUTE, second=COST_RUN_SECOND, microsecond=0)
     if run <= now:
-        run = (now + timedelta(hours=1)).replace(minute=COST_RUN_MINUTE, second=0, microsecond=0)
+        run = (now + timedelta(hours=1)).replace(
+            minute=COST_RUN_MINUTE, second=COST_RUN_SECOND, microsecond=0
+        )
     return run
 
 
 def cost_run_allowed(now: datetime, has_tomorrow: bool) -> bool:
-    if now.hour in COST_SKIP_HOURS:
-        return False
     return has_tomorrow or now.hour < 12
+
+
+def cost_keep_free(now: datetime, has_tomorrow: bool) -> int:
+    """Slots a cost run leaves free for a price request due within the hour."""
+    if now.hour == 23 or (now.hour >= 11 and not has_tomorrow):
+        return COST_KEEP_FREE
+    return 0
+
+
+def next_midnight_refresh(now: datetime) -> datetime:
+    """The next 00:05 strictly after `now`."""
+    run = now.replace(hour=MIDNIGHT_REFRESH[0], minute=MIDNIGHT_REFRESH[1], second=0, microsecond=0)
+    if run <= now:
+        run = (now + timedelta(days=1)).replace(
+            hour=MIDNIGHT_REFRESH[0], minute=MIDNIGHT_REFRESH[1], second=0, microsecond=0
+        )
+    return run

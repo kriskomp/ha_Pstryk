@@ -426,12 +426,18 @@ def test_cost_runs_only_on_leftover_budget(mods, env):
         await cost._handle_hourly_update(None)  # tomorrow cached: daily + yearly
         at_1550 = len(env.hass.session.sent)
         _set_clock(2026, 10, 2, 16, 20)
-        await cost._handle_hourly_update(None)  # 2 used: the last slot stays for prices
+        # Fork: no price request is due before 00:05, so cost may use the last slot.
+        await cost._handle_hourly_update(None)  # 2 used: daily gets the last slot, yearly waits
         at_1620 = len(env.hass.session.sent)
-        return at_1250, price, at_1550, at_1620
+        _set_clock(2026, 10, 2, 22, 5, 30)
+        await cost._handle_hourly_update(None)  # daily + yearly
+        _set_clock(2026, 10, 2, 23, 5, 0)
+        await cost._handle_hourly_update(None)  # 2 used before 00:05: the last slot stays for prices
+        at_2305 = len(env.hass.session.sent)
+        return at_1250, price, at_1550, at_1620, at_2305
 
-    at_1250, price, at_1550, at_1620 = _run(scenario())
-    assert (at_1250, price, at_1550, at_1620) == (0, "found", 3, 3)
+    at_1250, price, at_1550, at_1620, at_2305 = _run(scenario())
+    assert (at_1250, price, at_1550, at_1620, at_2305) == (0, "found", 3, 4, 6)
     assert env.hass.session.max_in_any_hour() <= 3
 
 
@@ -728,6 +734,10 @@ async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
     yearly 3, the other call at 14:30 is 4, 14:50 daily 5.
     """
     env.hass.session.cost_frames = True
+    # Fork: keep one slot as the original policy did, so the 14:50 run is partial.
+    # `mods` is shared by the whole module: the original is put back below.
+    original_keep_free = mods.cost.cost_keep_free
+    mods.cost.cost_keep_free = lambda now, has_tomorrow: 1
     client, coords = await env.build()
     await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))  # 12:05, tomorrow cached
     cost = _new_cost(mods, env, client, coords)
@@ -746,6 +756,7 @@ async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
     client, coords = await env.build()  # restart
     restarted = _new_cost(mods, env, client, coords, entry_id)
     await restarted.async_restore()
+    mods.cost.cost_keep_free = original_keep_free
     return full, sent, restarted, coords
 
 
@@ -1120,3 +1131,137 @@ def test_review5_a_restart_restores_the_send_time(mods, env):
         assert sent[2] == datetime(2026, 10, 4, 12, 50, 3, 100000, tzinfo=TZ)
         assert sent[5] - sent[2] >= timedelta(hours=1, seconds=2)
         assert env.hass.session.max_in_any_hour() == 3
+
+
+# Fork kriskomp/ha_Pstryk: one hourly rhythm at :05 (prices :05:00, cost :05:30).
+
+def _day_in_rhythm(mods, env, day, timer_ms=lambda h: 0):
+    """A whole local day: midnight refresh at 00:05, tomorrow checks at :05/:25/:45, cost at :05:30.
+
+    Returns (cost runs that sent 2 requests, tomorrow checks sent, tomorrow checks made).
+    Every request takes 400 ms; timers fire `timer_ms(hour)` late.
+    """
+    async def scenario():
+        _at(day, 0, 0)
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        for c in coords.values():
+            c.schedule_midnight_update = lambda: None
+        poller = mods.poll.PstrykTomorrowPoller(env.hass, "e")
+        _slow(env.hass.session)
+        full_runs, checks_sent, checks = 0, 0, 0
+        for hour in range(24):
+            ms = timer_ms(hour)
+            if hour == 0:
+                _at(day, 0, 5, 0, ms)
+                await asyncio.gather(*(c._handle_midnight_update(None) for c in coords.values()))
+            for minute in (5, 25, 45):
+                if (hour, minute) >= (12, 5):
+                    _at(day, hour, minute, 0, ms)
+                    before = len(env.hass.session.sent)
+                    result = await poller.async_check()
+                    if result != "found":
+                        checks += 1
+                        checks_sent += len(env.hass.session.sent) - before
+                if minute == 5:
+                    _at(day, hour, 5, 30, ms)
+                    before = len(env.hass.session.sent)
+                    await cost._handle_hourly_update(None)
+                    full_runs += (len(env.hass.session.sent) - before) == 2
+        return full_runs, checks_sent, checks
+
+    return _run(scenario())
+
+
+def test_fork_rhythm_cost_every_hour_within_budget(mods, env):
+    # Oct 2: the fixture already holds tomorrow (Oct 3), so cost may run every hour.
+    full_runs, checks_sent, checks = _day_in_rhythm(mods, env, 2, timer_ms=lambda h: 5 + (7 * h) % 40)
+    assert full_runs == 24  # 00:05:30 to 23:05:30, none skipped
+    assert checks == 0  # tomorrow already cached: the checks send nothing
+    assert env.hass.session.max_in_any_hour() <= 3
+
+
+def test_fork_rhythm_tomorrow_checks_keep_their_slots(mods, env):
+    # Oct 4 with Oct 5 unpublished all day: every check from 12:05 must still be sent.
+    env.hass.session.pricing = EARLY
+    full_runs, checks_sent, checks = _day_in_rhythm(mods, env, 4, timer_ms=lambda h: 5 + (11 * h) % 45)
+    assert full_runs == 12  # 00:05:30 to 11:05:30; from 12:00 cost waits for tomorrow's prices
+    assert checks == 36 and checks_sent == 36  # 12:05 to 23:45, none blocked by the 11:05:30 cost run
+    assert env.hass.session.max_in_any_hour() <= 3
+
+
+def test_fork_cost_retries_before_noon_leave_the_12_05_check_its_slot(mods, env):
+    # 11:05:30: every cost request fails and would retry 5 times. Cost keeps one slot
+    # free in hour 11, so the 12:05:00 check for tomorrow's prices is still sent.
+    env.hass.session.pricing = EARLY
+
+    async def scenario():
+        _at(4, 0, 5)
+        client, coords = await env.build()
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))
+        cost = mods.cost.PstrykCostDataUpdateCoordinator(env.hass, client, 5, 30, "e")
+        cost.price_coordinators = list(coords.values())
+        cost.schedule_hourly_update = lambda: None
+        _at(4, 11, 5, 30)
+        env.hass.session.statuses = [500] * 10
+        before = len(env.hass.session.sent)
+        await cost._handle_hourly_update(None)
+        cost_sent = len(env.hass.session.sent) - before
+        env.hass.session.statuses = []
+        _at(4, 12, 5, 0)
+        before = len(env.hass.session.sent)
+        result = await mods.poll.PstrykTomorrowPoller(env.hass, "e").async_check()
+        return cost_sent, len(env.hass.session.sent) - before, result
+
+    cost_sent, check_sent, result = _run(scenario())
+    assert cost_sent == 2  # retries stop at the kept slot
+    assert (check_sent, result) == (1, "no_tomorrow")
+    assert env.hass.session.max_in_any_hour() <= 3
+
+
+def test_fork_cost_retries_before_midnight_leave_the_00_05_refresh_its_slot(mods, env):
+    # 23:05:30: every cost request fails and would retry. Cost keeps one slot free
+    # in hour 23, so the 00:05:00 price refresh is still sent.
+    async def scenario():
+        _at(2, 12, 5)
+        client, coords = await env.build()
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))  # tomorrow cached
+        cost = mods.cost.PstrykCostDataUpdateCoordinator(env.hass, client, 5, 30, "e")
+        cost.price_coordinators = list(coords.values())
+        cost.schedule_hourly_update = lambda: None
+        _at(2, 23, 5, 30)
+        env.hass.session.statuses = [500] * 10
+        before = len(env.hass.session.sent)
+        await cost._handle_hourly_update(None)
+        cost_sent = len(env.hass.session.sent) - before
+        env.hass.session.statuses = []
+        _at(3, 0, 5, 0)
+        for c in coords.values():
+            c.schedule_midnight_update = lambda: None
+        before = len(env.hass.session.sent)
+        await asyncio.gather(*(c._handle_midnight_update(None) for c in coords.values()))
+        return cost_sent, len(env.hass.session.sent) - before
+
+    cost_sent, refresh_sent = _run(scenario())
+    assert cost_sent == 2  # retries stop at the kept slot
+    assert refresh_sent == 1  # buy and sell share one request
+    assert env.hass.session.max_in_any_hour() <= 3
+
+
+def test_fork_midnight_refresh_failure_keeps_todays_cached_prices(mods, env):
+    # Behaviour from PR #30, checked again at the new 00:05 time.
+    async def scenario():
+        _at(2, 12, 5)
+        client, coords = await env.build()
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))  # Oct 2 + Oct 3 cached
+        _at(3, 0, 5)
+        env.hass.session.statuses = [500] * 10
+        buy = coords["buy"]
+        buy.schedule_midnight_update = lambda: None
+        await buy._handle_midnight_update(None)
+        return buy
+
+    buy = _run(scenario())
+    assert buy.last_update_success is True
+    assert buy.data is not None
+    assert any(p["start"].startswith("2026-10-03") for p in buy.data["prices"])

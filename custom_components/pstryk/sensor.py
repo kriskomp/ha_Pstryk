@@ -150,7 +150,7 @@ async def async_setup_entry(
                 sell_coord = coordinator
 
         elif coordinator_type == "cost":
-            # No start-up fetch: cost runs at :50 on budget the prices leave free.
+            # No start-up fetch: cost runs at :05:30 on budget the prices leave free.
             coordinator.schedule_hourly_update()
 
     cost_coordinator.price_coordinators = [c for c in (buy_coord, sell_coord) if c]
@@ -182,7 +182,7 @@ async def async_setup_entry(
         remaining_entities.append(PstrykFlowSensor(
             cost_coordinator, metric, period, entry.entry_id
         ))
-    for kind in ("sell_revenue", "energy_sold"):
+    for kind in ("sell_revenue", "energy_sold", "buy_cost", "energy_bought"):
         remaining_entities.append(PstrykTotalSellSensor(cost_coordinator, kind, entry.entry_id))
     for period in ("monthly", "yearly", "total"):
         remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, period, entry.entry_id))
@@ -1107,7 +1107,9 @@ def _sell_totals(coordinator, period):
 
 
 def _sell_per_year(coordinator):
-    """{year: {sell_revenue, energy_sold}}: past years from history, current live."""
+    """{year: {sell_revenue, energy_sold, buy_cost, energy_bought}}: past years
+    from history, current year live. Saved history from before buy_cost /
+    energy_bought existed lacks those keys until the next cost run."""
     history = (coordinator.data or {}).get("history")
     yearly = (coordinator.data or {}).get("yearly")
     if history is None or not yearly:
@@ -1121,6 +1123,8 @@ def _sell_per_year(coordinator):
     result[current_year] = {
         "sell_revenue": round(yearly.get("total_sold", 0) or 0, 2),
         "energy_sold": round(yearly.get("rae_usage", 0) or 0, 3),
+        "buy_cost": round(yearly.get("total_cost", 0) or 0, 2),
+        "energy_bought": round(yearly.get("fae_usage", 0) or 0, 3),
     }
     return result
 
@@ -1133,17 +1137,26 @@ def _average_price(revenue, kwh):
 
 
 class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
-    """All-time sell revenue (PLN) or sold energy (kWh) since selling started."""
+    """All-time totals since 01.10.2024 that never reset: lossless for statistics.
+
+    Data arriving after a period's last update (the last hour of a day, for
+    instance) lands in the next hour's statistics instead of being lost.
+    """
 
     _attr_suggested_display_precision = 2
 
     KINDS = {
-        # kind: (name, unique_id, unit, device class, state class, icon, index)
+        # kind: (name, unique_id, unit, device class, state class, icon)
         "sell_revenue": ("Pstryk Total Sell Revenue", f"{DOMAIN}_sell_revenue_total", "PLN",
-                         SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-multiple", 0),
+                         SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-multiple"),
         "energy_sold": ("Pstryk Total Energy Sold", f"{DOMAIN}_energy_sold_total", "kWh",
                         SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING,
-                        "mdi:transmission-tower-export", 1),
+                        "mdi:transmission-tower-export"),
+        "buy_cost": ("Pstryk Total Buy Cost", f"{DOMAIN}_buy_cost_total", "PLN",
+                     SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-minus"),
+        "energy_bought": ("Pstryk Total Energy Bought", f"{DOMAIN}_energy_bought_total", "kWh",
+                          SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING,
+                          "mdi:transmission-tower-import"),
     }
 
     def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, kind: str, entry_id: str):
@@ -1151,7 +1164,7 @@ class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
         self.kind = kind
         self.entry_id = entry_id
         (self._name, self._unique_id, unit, device_class,
-         state_class, icon, self._index) = self.KINDS[kind]
+         state_class, icon) = self.KINDS[kind]
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._attr_state_class = state_class
@@ -1172,17 +1185,18 @@ class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        totals = _sell_totals(self.coordinator, "total")
-        if totals is None:
+        per_year = _sell_per_year(self.coordinator)
+        if per_year is None or any(self.kind not in entry for entry in per_year.values()):
             return None
-        return round(totals[self._index], 3 if self.kind == "energy_sold" else 2)
+        total = sum(entry[self.kind] for entry in per_year.values())
+        return round(total, 3 if self.kind.startswith("energy_") else 2)
 
     @property
     def extra_state_attributes(self) -> dict:
         per_year = _sell_per_year(self.coordinator)
         if per_year is None:
             return {}
-        attrs = {year: entry[self.kind] for year, entry in per_year.items() if entry[self.kind]}
+        attrs = {year: entry[self.kind] for year, entry in per_year.items() if entry.get(self.kind)}
         fetched_at = dt_util.parse_datetime(
             ((self.coordinator.data or {}).get("history") or {}).get("fetched_at") or "")
         if fetched_at:

@@ -16,7 +16,7 @@ from .const import (
     DEFAULT_RETRY_DELAY
 )
 from .api_client import PstrykAPIClient, BudgetExhausted, ClientClosed
-from .price_policy import today_published, tomorrow_fetch_due
+from .price_policy import next_midnight_refresh, today_published, tomorrow_fetch_due
 from .price_components import extract_components
 
 _LOGGER = logging.getLogger(__name__)
@@ -396,7 +396,7 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
                 for p in self.data.get("prices", [])
             )
             if has_today:
-                _LOGGER.debug("Midnight tick for %s - new day prices already in 48h data, API fetch follows at 00:01", self.price_type)
+                _LOGGER.debug("Midnight tick for %s - new day prices already in 48h data, API refresh follows at 00:05", self.price_type)
                 self.async_update_listeners()
                 self.schedule_hourly_update()
                 return
@@ -468,8 +468,8 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
             self._unsub_midnight()
             self._unsub_midnight = None
 
-        now = dt_util.now()
-        next_mid = (now + timedelta(days=1)).replace(hour=0, minute=1, second=0, microsecond=0)
+        # 00:05, in the same hourly rhythm as cost (see price_policy).
+        next_mid = next_midnight_refresh(dt_util.now())
 
         _LOGGER.debug("Scheduling next midnight update for %s at %s",
                      self.price_type, next_mid.strftime("%Y-%m-%d %H:%M:%S"))

@@ -1,4 +1,4 @@
-"""Check the API for tomorrow's prices from 12:10, every 20 minutes, until they are in.
+"""Check the API for tomorrow's prices from 12:05, every 20 minutes, until they are in.
 
 Each check is one request for buy and sell together, without retries, and only
 if the hourly budget has room. A check that finds nothing, fails or meets a

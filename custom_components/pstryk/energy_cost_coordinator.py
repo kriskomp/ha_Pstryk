@@ -14,7 +14,7 @@ from .const import (
     DEFAULT_RETRY_DELAY
 )
 from .api_client import PstrykAPIClient
-from .price_policy import COST_KEEP_FREE, cost_run_allowed, next_cost_run
+from .price_policy import COST_KEEP_FREE, cost_keep_free, cost_run_allowed, next_cost_run
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,9 +46,11 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         self._unsub_midnight = None
         # Set by sensor.py: cost waits until these have tomorrow's prices.
         self.price_coordinators = []
+        # Slots each cost request leaves free for prices; set per run.
+        self._keep_free = COST_KEEP_FREE
         # The last data fetched per period, kept across restarts: cost runs only
-        # at :50 on leftover budget, so the sensors would otherwise stay empty
-        # for an hour or more after every restart.
+        # at :05:30 on leftover budget, so the sensors would otherwise stay empty
+        # for up to an hour after every restart.
         self._store = Store(hass, COST_DATA_STORE_VERSION, f"{DOMAIN}_cost_data")
         self._saved = {}
 
@@ -96,7 +98,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     daily_url,
                     max_retries=self.retry_attempts,
                     base_delay=self.retry_delay,
-                    keep_free=COST_KEEP_FREE
+                    keep_free=self._keep_free
                 )
 
                 if daily_data:
@@ -122,7 +124,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     yearly_url,
                     max_retries=self.retry_attempts,
                     base_delay=self.retry_delay,
-                    keep_free=COST_KEEP_FREE
+                    keep_free=self._keep_free
                 )
 
                 if yearly_data:
@@ -191,19 +193,25 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 "frames": [f for f in response.get("frames", []) if local_year(f) == year]}
 
     def _process_sell_history(self, response):
-        """Real sell revenue (PLN) and sold energy (kWh) per local year."""
+        """Real totals per local year: sold/bought energy (kWh), sell revenue and buy cost (PLN)."""
         years = {}
         for frame in self._normalized_frames(response):
             parsed = dt_util.parse_datetime(frame.get("start") or "")
             if not parsed:
                 continue
             year = str(dt_util.as_local(parsed).year)
-            entry = years.setdefault(year, {"sell_revenue": 0.0, "energy_sold": 0.0})
+            entry = years.setdefault(year, {"sell_revenue": 0.0, "energy_sold": 0.0,
+                                            "buy_cost": 0.0, "energy_bought": 0.0})
             entry["sell_revenue"] += frame.get("energy_sold_value", 0) or 0
             entry["energy_sold"] += frame.get("rae", 0) or 0
+            # Same sum as the yearly total_cost / fae_usage of the current year.
+            entry["buy_cost"] += abs(frame.get("fae_cost", 0) or 0)
+            entry["energy_bought"] += frame.get("fae_usage", 0) or 0
         for entry in years.values():
-            entry["sell_revenue"] = round(entry["sell_revenue"], 2)
-            entry["energy_sold"] = round(entry["energy_sold"], 3)
+            for key in ("sell_revenue", "buy_cost"):
+                entry[key] = round(entry[key], 2)
+            for key in ("energy_sold", "energy_bought"):
+                entry[key] = round(entry[key], 3)
         _LOGGER.info("Sell history loaded: %s", years)
         return {"years": dict(sorted(years.items())),
                 "fetched_at": dt_util.now().isoformat()}
@@ -380,8 +388,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             self._unsub_hourly()
             self._unsub_hourly = None
 
-        # Cost is nice to have; prices come first. It runs at :50, outside the
-        # price hours, and only on budget the prices don't need.
+        # Prices come first. Cost runs every hour at :05:30, after the price
+        # requests of :05:00, on the budget the prices don't need.
         next_run = next_cost_run(dt_util.now())
 
         _LOGGER.debug("Scheduling next cost update at %s",
@@ -398,7 +406,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Skipping cost update at %s: prices first", local_now.strftime("%H:%M"))
             self.schedule_hourly_update()
             return
-        if not self.api_client.budget_room_soon(keep_free=COST_KEEP_FREE):
+        self._keep_free = cost_keep_free(local_now, tomorrow)
+        if not self.api_client.budget_room_soon(keep_free=self._keep_free):
             _LOGGER.debug("Skipping cost update at %s: API budget kept for prices", local_now.strftime("%H:%M"))
             self.schedule_hourly_update()
             return
