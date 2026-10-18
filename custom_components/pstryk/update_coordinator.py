@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from .const import (
     API_URL,
@@ -52,6 +53,9 @@ def is_likely_placeholder_data(prices_for_day):
     return False
 
 
+PRICE_CACHE_STORE_VERSION = 1
+
+
 class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass, api_client: PstrykAPIClient, price_type, mqtt_48h_mode=False, retry_attempts=None, retry_delay=None, entry_id=None):
@@ -65,8 +69,12 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
         self._had_tomorrow_prices = False
         self._unsub_budget_retry = None
 
+        # Fork: the price cache lives in /config/.storage (Home Assistant's place
+        # for integration data), not in the integration's own folder, which HACS
+        # replaces on every update. The old file is moved over once (_load_cache).
+        self._store = Store(hass, PRICE_CACHE_STORE_VERSION, f"{DOMAIN}_price_cache_{price_type}")
         integration_path = os.path.dirname(os.path.abspath(__file__))
-        self._cache_file = os.path.join(integration_path, f"cache_{price_type}.json")
+        self._legacy_cache_file = os.path.join(integration_path, f"cache_{price_type}.json")
         self._has_tomorrow = False
 
         if retry_attempts is None:
@@ -90,44 +98,61 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
 
         return convert_price(frame.get(price_key, pricing.get(price_key)))
     async def _load_cache(self) -> dict[str, Any] | None:
-        if not os.path.exists(self._cache_file):
+        try:
+            data = await self._store.async_load()
+        except Exception as err:
+            _LOGGER.warning("Failed to read cache for %s: %s", self.price_type, err)
+            data = None
+        if data is None:
+            data = await self._migrate_legacy_cache()
+        if data and data.get("invalid"):
+            _LOGGER.warning("Cache for %s is marked INVALID: %s (failed at: %s)",
+                            self.price_type,
+                            data.get("reason", "unknown"),
+                            data.get("failed_at", "unknown"))
             return None
+        return data
 
-        def _read() -> dict[str, Any] | None:
-            try:
-                with open(self._cache_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+    async def _migrate_legacy_cache(self) -> dict[str, Any] | None:
+        """Move a cache_<type>.json left in the integration folder to .storage, once."""
+        path = self._legacy_cache_file
 
-                    if data.get("invalid"):
-                        _LOGGER.warning("Cache for %s is marked INVALID: %s (failed at: %s)",
-                                      self.price_type,
-                                      data.get("reason", "unknown"),
-                                      data.get("failed_at", "unknown"))
-                        return None
-
-                    return data
-            except Exception as err:
-                _LOGGER.warning("Failed to read cache for %s: %s", self.price_type, err)
+        def _read_and_remove() -> dict[str, Any] | None:
+            if not os.path.exists(path):
                 return None
-
-        return await asyncio.to_thread(_read)
-
-    async def _save_cache(self, data: dict[str, Any]) -> None:
-        def _write() -> None:
             try:
-                data["last_updated"] = dt_util.now().isoformat()
-                with open(self._cache_file, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-                _LOGGER.debug("Saved cache for %s to %s", self.price_type, self._cache_file)
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as err:
+                _LOGGER.warning("Failed to read old cache file %s: %s", path, err)
+                data = None
+            try:
+                os.remove(path)
+            except OSError as err:
+                _LOGGER.debug("Could not remove old cache file %s: %s", path, err)
+            return data
+
+        data = await asyncio.to_thread(_read_and_remove)
+        if data is not None:
+            _LOGGER.info("Moved the %s price cache to .storage", self.price_type)
+            try:
+                await self._store.async_save(data)
             except Exception as err:
                 _LOGGER.warning("Failed to write cache for %s: %s", self.price_type, err)
+        return data
 
-        await asyncio.to_thread(_write)
+    async def _save_cache(self, data: dict[str, Any]) -> None:
+        try:
+            data["last_updated"] = dt_util.now().isoformat()
+            await self._store.async_save(data)
+            _LOGGER.debug("Saved cache for %s to .storage", self.price_type)
+        except Exception as err:
+            _LOGGER.warning("Failed to write cache for %s: %s", self.price_type, err)
 
     async def _load_own_cache(self) -> dict[str, Any] | None:
         """The cache, if this config entry wrote it.
 
-        The files are named by price type only and outlive their entry; an
+        The stores are named by price type only and outlive their entry; an
         entry added later may belong to another meter with another tariff. A
         cache without an owner (older versions) is not used either.
         """
