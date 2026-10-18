@@ -4,12 +4,14 @@ Użyj mojego kodu 1ML2X7 w koszyku w aplikacji. Bonus trafi do Twojego Portfela 
 
 # Integracja Home Assistant z Pstryk API
 
-!!! Dedykowana Karta do integracji:
+!!! Dedykowana Karta do integracji (autora oryginału):
 https://github.com/balgerion/ha_Pstryk_card
 
 [![Wersja](https://img.shields.io/badge/wersja-2.2.3-blue)](https://github.com/kriskomp/ha_Pstryk/)
 
 Integracja dla Home Assistant umożliwiająca śledzenie aktualnych cen energii elektrycznej oraz prognoz z platformy Pstryk.
+
+Lista zmian w kolejnych wersjach: [Releases](https://github.com/kriskomp/ha_Pstryk/releases).
 
 ## Czym ten fork różni się od oryginału
 
@@ -22,12 +24,16 @@ To jest fork integracji [balgerion/ha_Pstryk](https://github.com/balgerion/ha_Ps
 | Ceny na jutro | od 14:00 (tryb 48h) albo dopiero o 00:01 | od 12:05, co 20 minut do skutku, w każdym trybie |
 | Składniki ceny w `sensor.pstryk_json_buy` / `_sell` | brak | `tge_price`, dystrybucja, opłata, VAT, akcyza (z [PR #29](https://github.com/balgerion/ha_Pstryk/pull/29) autorstwa mnarozny) |
 | Koszty, bilanse, średnie | co godzinę o :01 | co godzinę o :05:30 (dane godziny są w API do 3 min po jej końcu), po restarcie odtwarzane z pamięci |
+| Brak miejsca w limicie API | – | wpis informacyjny w dzienniku (nie ostrzeżenie); brakujące dane kosztów dociągane zaraz po zwolnieniu miejsca, nie dopiero za godzinę |
+| Nieudane pobranie kosztów | encje kosztowe przechodzą w „niedostępny” | encje zostają przy ostatnich wartościach do następnego udanego pobrania |
 | Koszty po starcie Home Assistanta | pobierane przy każdym starcie (po ok. 15 s) | pobierane od razu tylko wtedy, gdy brak aktualnych danych (np. pierwsza instalacja); inaczej z pamięci, bez zapytania (patrz [Pierwsze uruchomienie](#pierwsze-uruchomienie)) |
 | Przepływy energii i pieniędzy | tylko w atrybutach bilansu | 13 nowych encji: dzienne kupno/sprzedaż (kWh, PLN), sprzedaż miesięczna/roczna (kWh, PLN), sumy od 01.10.2024 (kupno i sprzedaż, kWh i PLN) i średnia cena sprzedaży od początku – patrz [Encje przepływów i sprzedaży](#encje-przepływów-i-sprzedaży-fork-kriskompha_pstryk) |
 | Pamięć cen (cache) | pliki `cache_buy.json` / `cache_sell.json` w folderze integracji – kasowane przy każdej aktualizacji przez HACS, więc po aktualizacji ceny są pobierane od nowa | `/config/.storage` (jak inne dane Home Assistanta) – przetrwa aktualizacje; stare pliki są przenoszone automatycznie |
 | Odświeżanie ręczne | brak | `button.pstryk_refresh_prices` (pilnuje limitu) i `sensor.pstryk_prices_fetched` |
 | Średnie ceny kupna/sprzedaży (6 encji) | wszystkie włączone | bez zmian w działaniu; domyślnie włączone tylko średnie sprzedaży miesięczna/roczna – patrz [Encje domyślnie wyłączone](#encje-domyślnie-wyłączone) |
 | Średnia cena sprzedaży od początku | brak | `sensor.pstryk_sell_total_average` (nazwa w stylu oryginału) |
+
+**Przejście z oryginału:** patrz [Instalacja → Przejście z oryginału (balgerion)](#przejście-z-oryginału-balgerion).
 
 ### Encje domyślnie wyłączone
 
@@ -50,7 +56,7 @@ Włączone zostają `sensor.pstryk_sell_monthly_average` i `sensor.pstryk_sell_y
 
 ## Status API
 
-Integracja korzysta  z nowego endpointu `unified-metrics`
+Integracja korzysta z nowego endpointu `unified-metrics`
 
 ## Funkcje  
 - Aktualna cena kupna i sprzedaży energii  
@@ -76,11 +82,20 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 ## Instalacja
 
 ### Metoda 1: Via HACS
-1. W HACS przejdź do `Integracje`
-2. Kliknij `Dodaj repozytorium`
-3. Wpisz URL: `https://github.com/kriskomp/ha_Pstryk`
-4. Wybierz kategorię: `Integration`
-5. Zainstaluj i zrestartuj Home Assistant
+1. W HACS kliknij **⋮** (prawy górny róg) → **Niestandardowe repozytoria**
+2. Repozytorium: `https://github.com/kriskomp/ha_Pstryk`, typ: **Integracja** → **Dodaj**
+3. Wyszukaj w HACS `ha_Pstryk` (autor **kriskomp**) → **Pobierz** → wybierz najnowszą wersję
+4. Zrestartuj Home Assistant
+
+### Przejście z oryginału (balgerion)
+Domena integracji (`pstryk`) jest ta sama, więc konfiguracja (klucz API, opcje), encje i ich historia zostają.
+1. Zrób kopię zapasową Home Assistanta.
+2. HACS → **ha_Pstryk (balgerion)** → **⋮ → Usuń**. Usuwa to tylko pliki integracji. **Nie usuwaj** integracji w *Ustawienia → Urządzenia i usługi* – tam jest klucz API i konfiguracja.
+3. Dodaj i pobierz fork wg Metody 1, potem restart.
+4. Wyłącz automatyzacje wywołujące `homeassistant.update_entity` na sensorach Pstryk (patrz uwaga wyżej).
+5. Opcjonalnie wyłącz 4 średnie z sekcji [Encje domyślnie wyłączone](#encje-domyślnie-wyłączone).
+
+Po pierwszym starcie ceny są pobierane od nowa (pamięć cen oryginału jest kasowana przez HACS razem z jego plikami), a koszty – od razu po starcie (patrz [Pierwsze uruchomienie](#pierwsze-uruchomienie)).
 
 ### Metoda 2: Ręczna instalacja
 1. Utwórz folder `custom_components/pstryk` w katalogu konfiguracyjnym HA
@@ -90,11 +105,11 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 ## Konfiguracja
 1. Przejdź do `Ustawienia` → `Urządzenia i usługi`
 2. Kliknij `Dodaj integrację`
-3. Wyszukaj "Psrryk Energy"
+3. Wyszukaj "Pstryk Energy"
 4. Wprowadź dane:
 - **Klucz API**: Twój klucz z platformy Pstryk
-- **Liczba najlepszych cen kupna**: (domyślnie 5)
-- **Liczba najlepszych cen sprzedaży**: (domyślnie 5)
+- **Liczba najlepszych / najgorszych cen kupna i sprzedaży**: (domyślnie 5)
+- **Sensory JSON z cenami**, **mostek MQTT (EVCC)**, **ponawianie zapytań** – opcjonalnie; wszystkie ustawienia można później zmienić w opcjach integracji
 
 ## Scrnshoty
 
@@ -133,7 +148,7 @@ Wszystkie wartości pochodzą z danych rozliczeniowych Pstryk (`unified-metrics`
 
 | Okres | Energia kupiona (kWh) | Koszt zakupu (PLN) | Energia sprzedana (kWh) | Przychód ze sprzedaży (PLN) | Średnia cena sprzedaży (PLN/kWh) |
 |---|---|---|---|---|---|
-| Dzień | `sensor.pstryk_daily_energy_bought` | `sensor.pstryk_daily_buy_cost` | `sensor.pstryk_daily_energy_sold` | `sensor.pstryk_daily_sell_revenue` | – |
+| Dzień | `sensor.pstryk_daily_energy_bought` | `sensor.pstryk_daily_buy_cost` | `sensor.pstryk_daily_energy_sold` | `sensor.pstryk_daily_sell_revenue` | `sensor.pstryk_sell_daily_average` (oryginał, domyślnie wyłączona) |
 | Miesiąc | – | – | `sensor.pstryk_monthly_energy_sold` | `sensor.pstryk_monthly_sell_revenue` | `sensor.pstryk_sell_monthly_average` (oryginał) |
 | Rok | – | – | `sensor.pstryk_yearly_energy_sold` | `sensor.pstryk_yearly_sell_revenue` | `sensor.pstryk_sell_yearly_average` (oryginał) |
 | Całość | `sensor.pstryk_total_energy_bought` | `sensor.pstryk_total_buy_cost` | `sensor.pstryk_total_energy_sold` | `sensor.pstryk_total_sell_revenue` | `sensor.pstryk_sell_total_average` |
@@ -164,6 +179,13 @@ Pstryk pozwala na 3 zapytania na godzinę na endpoint ([regulamin API](https://p
 - Jeśli limit API nie ma miejsca na wszystko (np. kilka restartów w ciągu godziny), brakująca część jest **dociągana, gdy tylko zwolni się miejsce** w limicie (zwykle kilka–kilkadziesiąt minut), a nie dopiero o następnym :05:30. W dzienniku pojawia się wtedy informacja (nie błąd): `Cost data (...) will be fetched at HH:MM:SS, when the API limit frees`.
 - Dociąganie dotyczy tylko danych, których brakuje. Gdy dane są aktualne, a jakieś pobranie się nie zmieści, czekają na najbliższe :05:30 – dzięki temu limit nie jest stale przepełniony i integracja wraca do rytmu :05:30.
 - Restart przy aktualnych danych nie wysyła żadnego zapytania o koszty.
+
+### Znane ograniczenia
+
+- To, że ceny i koszty dzielą jeden limit 3 zapytań na godzinę, wynika z opisu API (jeden endpoint `unified-metrics`), a nie z potwierdzenia Pstryka – integracja przyjmuje wariant ostrożny.
+- Po nagłym zatrzymaniu Home Assistanta tuż po wysłaniu zapytania na granicy godziny może wyjść czwarte zapytanie (szczegóły w sekcji o limicie).
+- Ostatnia godzina doby nie trafia do sensorów dziennych (zerują się o północy) – trafia do sensorów `total` i ich statystyk.
+- Wartości miesięczne i roczne zależą od tego, co Pstryk wlicza w koszt i przychód danego okresu; integracja pokazuje je bez przeliczania.
 
 ### Sensory JSON (opcjonalne)
 
