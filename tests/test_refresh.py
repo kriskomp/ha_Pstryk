@@ -14,7 +14,7 @@ import importlib
 import json
 import sys
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -1396,8 +1396,9 @@ def test_fork_restart_with_little_budget_catches_up_and_returns_to_the_rhythm(mo
     result, after_start, catch_up, (after, at), runs, cost = _run(scenario())
     assert result == "partial"
     assert after_start == ["history", "monthly", "yearly"]  # month first: totals at once
-    # The slot of 16:09:38 frees at 17:09:40 (1 h + 2 s margin, as in the log), catch-up 3 s later.
-    assert catch_up[0].astimezone(TZ) == datetime(2026, 10, 2, 17, 9, 43, tzinfo=TZ)
+    # The slot of 16:09:38 frees at 17:09:40 (1 h + 2 s margin, as in the log); catch-up
+    # 10 s later, after a price fetch waiting for the same slot (slot + 5 s).
+    assert catch_up[0].astimezone(TZ) == datetime(2026, 10, 2, 17, 9, 50, tzinfo=TZ)
     assert after == ["daily", "history", "monthly", "yearly"]
     assert at < datetime(2026, 10, 2, 17, 10, tzinfo=TZ)  # daily by 17:10, not 18:05:30
     assert runs == [2, 2]  # back in the :05:30 rhythm
@@ -1547,3 +1548,119 @@ def test_fork_invalid_old_cache_file_is_not_used(mods, env, tmp_path):
     cached, files = _run(scenario())
     assert cached is None
     assert files == []
+
+
+# Fork 2.2.4: consistency (a full API limit is not an error), unload, DST.
+
+def test_fork_price_startup_on_a_full_limit_is_not_an_error(mods, env, caplog):
+    import logging
+
+    async def scenario():
+        _at(2, 16, 9, 38)
+        client, coords = await env.build()
+        for _ in range(3):  # three requests fill the hour
+            await client.fetch("https://api.pstryk.pl/integrations/meter-data/unified-metrics/?metrics=cost",
+                               max_retries=1)
+        CACHE.clear()  # no price cache (e.g. right after a HACS update of an old version)
+        _at(2, 16, 20)
+        with caplog.at_level(logging.DEBUG, logger="pstryk"):
+            results = await asyncio.gather(*(c.async_startup() for c in coords.values()),
+                                           return_exceptions=True)
+        return results, coords
+
+    results, coords = _run(scenario())
+    assert all(isinstance(r, mods.api.BudgetExhausted) for r in results)
+    price_records = [r for r in caplog.records if r.name.endswith("update_coordinator")]
+    assert not [r for r in price_records if r.levelno >= logging.WARNING]
+    assert any("wait for the API limit; fetching at 17:09:4" in r.getMessage() for r in price_records)
+    assert coords["buy"]._unsub_budget_retry is not None  # booked for when the slot frees
+
+
+def test_fork_sensor_setup_logs_no_error_for_a_full_limit(mods):
+    # sensor.py: the start-up wrapper treats BudgetExhausted as "waiting", not as a failure.
+    import inspect
+    src = inspect.getsource(mods.sensor.async_setup_entry)
+    assert "except BudgetExhausted" in src
+    assert src.index("except BudgetExhausted") < src.index('_LOGGER.error("Failed initial fetch')
+
+
+def test_fork_unload_cancels_a_pending_catch_up(mods, env):
+    async def scenario():
+        _at(2, 16, 9, 38)
+        client, coords = await env.build()
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))
+        _at(2, 16, 20)
+        await client.fetch("https://api.pstryk.pl/integrations/meter-data/unified-metrics/?metrics=cost",
+                           max_retries=1)
+        _at(2, 16, 38)
+        env.hass.session.cost_frames = True
+        cost = _new_cost(mods, env, client, coords)
+        await cost.async_restore()
+        await cost.async_startup_refresh()
+        pending = cost._unsub_catch_up is not None
+        cost.async_shutdown_timers()
+        after_shutdown = cost._unsub_catch_up
+        client.close()
+        before = len(env.hass.session.sent)
+        result = await cost._async_run(("day",), 0, "catch-up")  # a timer that fired anyway
+        return pending, after_shutdown, result, len(env.hass.session.sent) - before
+
+    pending, after_shutdown, result, sent = _run(scenario())
+    assert pending is True
+    assert after_shutdown is None  # the pending catch-up is cancelled
+    assert (result, sent) == ("stopped", 0)
+
+
+def test_fork_entry_unload_shuts_down_cost_timers():
+    init_src = (ROOT / "custom_components" / "pstryk" / "__init__.py").read_text()
+    assert "cost_coordinator.async_shutdown_timers()" in init_src
+
+
+def test_fork_cost_catch_up_leaves_the_slot_to_a_waiting_price_fetch(mods, env):
+    async def scenario():
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        coords["buy"]._unsub_budget_retry = lambda: None  # a price fetch is waiting
+        kept = []
+
+        async def fake_run(parts, keep_free, reason):
+            kept.append(keep_free)
+            return "fetched"
+
+        cost._async_run = fake_run
+        _at(2, 9, 30)  # a morning hour: normally no slot is kept
+        await cost._handle_catch_up(None)
+        return kept
+
+    assert _run(scenario()) == [1]
+
+
+def test_fork_dst_end_cost_runs_every_real_hour():
+    """25.10.2026: 25 hours (02:00-03:00 twice). One cost run per real hour, none skipped."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pp", ROOT / "custom_components" / "pstryk" / "price_policy.py")
+    pp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pp)
+    t = datetime(2026, 10, 25, 0, 0, tzinfo=TZ)
+    runs = []
+    while True:
+        t = pp.next_cost_run(t)
+        if t.astimezone(TZ).date() != date(2026, 10, 25):
+            break
+        runs.append(t.astimezone(timezone.utc))
+    assert len(runs) == 25
+    assert all(b - a == timedelta(hours=1) for a, b in zip(runs, runs[1:]))
+
+
+def test_fork_dst_end_price_tick_is_a_real_hour_later(mods, env):
+    async def scenario():
+        client, coords = await env.build()
+        buy = coords["buy"]
+        # 02:30 CEST (00:30 UTC), just before clocks go back at 03:00 CEST.
+        CLOCK[0] = datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc).astimezone(TZ)
+        buy.schedule_hourly_update()
+        return SCHEDULED[-1][0]
+
+    when = _run(scenario())
+    # The next tick is 01:00:05 UTC = 02:00:05 CET (the repeated hour), not 03:00 CET.
+    assert when.astimezone(timezone.utc) == datetime(2026, 10, 25, 1, 0, 5, tzinfo=timezone.utc)
