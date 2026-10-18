@@ -191,10 +191,12 @@ async def main():
         "sensor.pstryk_monthly_energy_sold", "sensor.pstryk_yearly_energy_sold",
         "sensor.pstryk_total_sell_revenue", "sensor.pstryk_total_energy_sold",
         "sensor.pstryk_total_energy_bought", "sensor.pstryk_total_buy_cost",
-        "sensor.pstryk_monthly_average_sell_price", "sensor.pstryk_yearly_average_sell_price",
-        "sensor.pstryk_total_average_sell_price"]))
+        "sensor.pstryk_sell_monthly_average", "sensor.pstryk_sell_yearly_average",
+        "sensor.pstryk_sell_total_average"]))
     ids = [s.unique_id for s in every]
     check("15 distinct unique ids", len(set(ids)) == 15, str(ids))
+    check("total average named like the original averages",
+          (avg["total"].name, avg["total"].unique_id) == ("Pstryk Sell Total Average", "pstryk_sell_total_average"))
     check("total bought/cost: names, units, never reset",
           (tot_bought.name, tot_bought._attr_native_unit_of_measurement, tot_bought._attr_state_class,
            tot_cost.name, tot_cost._attr_native_unit_of_measurement, tot_cost._attr_state_class)

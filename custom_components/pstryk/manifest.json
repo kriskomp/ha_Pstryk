@@ -1,7 +1,7 @@
 {
   "domain": "pstryk",
   "name": "Pstryk Energy",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "codeowners": ["@kriskomp"],
   "after_dependencies": ["mqtt"],
   "iot_class": "cloud_polling",

@@ -7,7 +7,7 @@ Użyj mojego kodu 1ML2X7 w koszyku w aplikacji. Bonus trafi do Twojego Portfela 
 !!! Dedykowana Karta do integracji:
 https://github.com/balgerion/ha_Pstryk_card
 
-[![Wersja](https://img.shields.io/badge/wersja-2.2.0-blue)](https://github.com/kriskomp/ha_Pstryk/)
+[![Wersja](https://img.shields.io/badge/wersja-2.2.1-blue)](https://github.com/kriskomp/ha_Pstryk/)
 
 Integracja dla Home Assistant umożliwiająca śledzenie aktualnych cen energii elektrycznej oraz prognoz z platformy Pstryk.
 
@@ -23,10 +23,29 @@ To jest fork integracji [balgerion/ha_Pstryk](https://github.com/balgerion/ha_Ps
 | Składniki ceny w `sensor.pstryk_json_buy` / `_sell` | brak | `tge_price`, dystrybucja, opłata, VAT, akcyza (z [PR #29](https://github.com/balgerion/ha_Pstryk/pull/29) autorstwa mnarozny) |
 | Koszty, bilanse, średnie | co godzinę o :01 | co godzinę o :05:30 (dane godziny są w API do 3 min po jej końcu), po restarcie odtwarzane z pamięci |
 | Koszty po starcie Home Assistanta | pobierane przy każdym starcie (po ok. 15 s) | pobierane od razu tylko wtedy, gdy brak aktualnych danych (np. pierwsza instalacja); inaczej z pamięci, bez zapytania (patrz [Pierwsze uruchomienie](#pierwsze-uruchomienie)) |
-| Przepływy energii i pieniędzy | tylko w atrybutach bilansu | 17 osobnych encji: dzienne kupno/sprzedaż (kWh, PLN), sprzedaż miesięczna/roczna, sumy od 01.10.2024 i rzeczywista średnia cena sprzedaży – patrz [Encje przepływów i sprzedaży](#encje-przepływów-i-sprzedaży-fork-kriskompha_pstryk) |
+| Przepływy energii i pieniędzy | tylko w atrybutach bilansu | 13 nowych encji: dzienne kupno/sprzedaż (kWh, PLN), sprzedaż miesięczna/roczna (kWh, PLN), sumy od 01.10.2024 (kupno i sprzedaż, kWh i PLN) i średnia cena sprzedaży od początku – patrz [Encje przepływów i sprzedaży](#encje-przepływów-i-sprzedaży-fork-kriskompha_pstryk) |
 | Odświeżanie ręczne | brak | `button.pstryk_refresh_prices` (pilnuje limitu) i `sensor.pstryk_prices_fetched` |
+| Średnie ceny kupna/sprzedaży (6 encji) | wszystkie włączone | bez zmian w działaniu; domyślnie włączone tylko średnie sprzedaży miesięczna/roczna – patrz [Encje domyślnie wyłączone](#encje-domyślnie-wyłączone) |
+| Średnia cena sprzedaży od początku | brak | `sensor.pstryk_sell_total_average` (nazwa w stylu oryginału) |
 
-**Uwaga przy przejściu z oryginału:** wyłącz automatyzacje, które co godzinę wywołują `homeassistant.update_entity` na sensorach Pstryk – każde takie wywołanie to zapytanie do API, które zabiera miejsce w limicie. Do ręcznego odświeżenia służy `button.pstryk_refresh_prices`.
+### Encje domyślnie wyłączone
+
+Wszystkie encje oryginału zostają. Cztery średnie są w forku **domyślnie wyłączone** – przy nowej instalacji nie pojawiają się jako aktywne, ale można je włączyć w każdej chwili:
+
+| Identyfikator encji | Nazwa w HA | Co pokazuje |
+|---|---|---|
+| `sensor.pstryk_buy_daily_average` | Pstryk Buy Daily Average | koszt zakupu ÷ kWh kupione, bieżący dzień (PLN/kWh) |
+| `sensor.pstryk_buy_monthly_average` | Pstryk Buy Monthly Average | jw., bieżący miesiąc |
+| `sensor.pstryk_buy_yearly_average` | Pstryk Buy Yearly Average | jw., bieżący rok |
+| `sensor.pstryk_sell_daily_average` | Pstryk Sell Daily Average | przychód ze sprzedaży ÷ kWh sprzedane, bieżący dzień (PLN/kWh) |
+
+Włączone zostają `sensor.pstryk_sell_monthly_average` i `sensor.pstryk_sell_yearly_average` – to rzeczywista średnia cena sprzedaży (przychód ÷ kWh) za miesiąc i rok; od początku sprzedaży: `sensor.pstryk_sell_total_average`.
+
+Średnie liczone są wprost z rozliczenia Pstryk (koszt ÷ kWh). Przy bardzo małym poborze z sieci (np. dom zasilany z magazynu energii) dzienna średnia zakupu bywa bardzo wysoka – to koszt dnia podzielony przez kilka Wh.
+
+**Włączenie:** *Ustawienia → Urządzenia i usługi → Encje* → wyszukaj encję (w filtrach włącz pokazywanie wyłączonych) → otwórz → ⚙ Ustawienia → **Włączone** → Aktualizuj.
+
+**Przy przejściu z oryginału** Home Assistant zostawia te encje włączone (ustawienie domyślne dotyczy tylko nowo dodawanych encji). Żeby je wyłączyć: *Ustawienia → Urządzenia i usługi → Encje* → zaznacz encje z tabeli → ⋮ → **Wyłącz wybrane**.
 
 ## Status API
 
@@ -47,7 +66,8 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 - Konfiguracja z poziomu integracji  
 - Walidacja klucza API / Cache danych / Zabezpieczenie przed timeoutem API  
 - Integracja wystawia po lokalnym MQTT tablice cen w natywnym formacie EVCC  
-- Średnia zakupu oraz sprzedaży - miesięczna/roczna  
+- Średnia zakupu oraz sprzedaży - miesięczna/roczna (w forku domyślnie włączone tylko średnie sprzedaży miesięczna/roczna)  
+- Średnia cena sprzedaży od początku sprzedaży (`sensor.pstryk_sell_total_average`)  
 - Bilans miesięczny/roczny  
 - Debug i logowanie  
 
@@ -93,13 +113,14 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 |-----------------------------------------|----------------------------------------------|
 | `sensor.pstryk_current_buy_price`       | Aktualna cena kupna energii + tabela         |
 | `sensor.pstryk_current_sell_price`      | Aktualna cena sprzedaży energii + tabela     |
-| `sensor.pstryk_buy_monthly_average`     | Średnia miesięczna cena kupna energii        |
-| `sensor.pstryk_buy_yearly_average`      | Średnia roczna cena kupna energii            |
-| `sensor.pstryk_sell_monthly_average`    | Średnia miesięczna cena sprzedaży energii    |
-| `sensor.pstryk_sell_yearly_average`     | Średnia roczna cena sprzedaży energii        |
 | `sensor.pstryk_daily_financial_balance` | Dzienny bilans kupna/sprzedaży               |
 | `sensor.pstryk_monthly_financial_balance`| Miesięczny bilans kupna/sprzedaży            |
 | `sensor.pstryk_yearly_financial_balance` | Roczny bilans kupna/sprzedaży                |
+| `sensor.pstryk_sell_monthly_average`    | Średnia miesięczna cena sprzedaży energii    |
+| `sensor.pstryk_sell_yearly_average`     | Średnia roczna cena sprzedaży energii        |
+| `sensor.pstryk_sell_total_average`      | Średnia cena sprzedaży od 01.10.2024 (fork)  |
+| `sensor.pstryk_buy_daily_average`, `_monthly_`, `_yearly_` | Średnia cena kupna (domyślnie wyłączone) |
+| `sensor.pstryk_sell_daily_average`      | Średnia dzienna cena sprzedaży (domyślnie wyłączona) |
 | `sensor.pstryk_json_buy`                | Ceny kupna 48h w formacie JSON (opcjonalny)  |
 | `sensor.pstryk_json_sell`               | Ceny sprzedaży 48h w formacie JSON (opcjonalny) |
 | `sensor.pstryk_prices_fetched`          | Czas pobrania z API cen, które są teraz w użyciu |
@@ -112,9 +133,9 @@ Wszystkie wartości pochodzą z danych rozliczeniowych Pstryk (`unified-metrics`
 | Okres | Energia kupiona (kWh) | Koszt zakupu (PLN) | Energia sprzedana (kWh) | Przychód ze sprzedaży (PLN) | Średnia cena sprzedaży (PLN/kWh) |
 |---|---|---|---|---|---|
 | Dzień | `sensor.pstryk_daily_energy_bought` | `sensor.pstryk_daily_buy_cost` | `sensor.pstryk_daily_energy_sold` | `sensor.pstryk_daily_sell_revenue` | – |
-| Miesiąc | – | – | `sensor.pstryk_monthly_energy_sold` | `sensor.pstryk_monthly_sell_revenue` | `sensor.pstryk_monthly_average_sell_price` |
-| Rok | – | – | `sensor.pstryk_yearly_energy_sold` | `sensor.pstryk_yearly_sell_revenue` | `sensor.pstryk_yearly_average_sell_price` |
-| Całość | `sensor.pstryk_total_energy_bought` | `sensor.pstryk_total_buy_cost` | `sensor.pstryk_total_energy_sold` | `sensor.pstryk_total_sell_revenue` | `sensor.pstryk_total_average_sell_price` |
+| Miesiąc | – | – | `sensor.pstryk_monthly_energy_sold` | `sensor.pstryk_monthly_sell_revenue` | `sensor.pstryk_sell_monthly_average` (oryginał) |
+| Rok | – | – | `sensor.pstryk_yearly_energy_sold` | `sensor.pstryk_yearly_sell_revenue` | `sensor.pstryk_sell_yearly_average` (oryginał) |
+| Całość | `sensor.pstryk_total_energy_bought` | `sensor.pstryk_total_buy_cost` | `sensor.pstryk_total_energy_sold` | `sensor.pstryk_total_sell_revenue` | `sensor.pstryk_sell_total_average` |
 
 - **Całość** liczona jest od 01.10.2024 (start Pstryk); miesiące sprzed umowy API zwraca jako zera. Atrybuty sensorów `total` zawierają rozbicie per rok.
 - **Średnia cena sprzedaży** = przychód ÷ kWh sprzedane w tym samym okresie (średnia ważona, rzeczywista). Gdy nic nie sprzedano, sensor nie ma wartości.
@@ -128,17 +149,20 @@ Pstryk pozwala na 3 zapytania na godzinę na endpoint ([regulamin API](https://p
 - **Jeden rytm co godzinę o :05:** najpierw ceny (o :05:00, tylko gdy są potrzebne), potem koszty (o :05:30). Pstryk udostępnia dane zamkniętej godziny do 3 minut po jej końcu, a godzina w trakcie nie ma jeszcze danych.
 - **Ceny na jutro** są sprawdzane o 12:05, 12:25, 12:45 i dalej co 20 minut, aż się pojawią. Jedno sprawdzenie to jedno zapytanie dla kupna i sprzedaży, bez ponowień. Działa to w każdym trybie i zastępuje sprawdzanie między 14:00 a 15:00.
 - **O 00:05** odświeżane są ceny na nowy dzień (są już w pamięci jako wczorajsze „ceny na jutro”; nieudane odświeżenie ich nie kasuje).
-- **Koszty, średnie, bilans i encje sprzedaży** są pobierane co godzinę o :05:30, każdej godziny doby. Po 12:00 czekają, aż ceny na jutro będą pobrane. W godzinach poprzedzających zapytanie o ceny (23: odświeżenie o 00:05; od 11 do pobrania cen na jutro: sprawdzenia od 12:05) koszty zostawiają jedno zapytanie wolne, żeby ich ponowienia nie zablokowały cen. Po restarcie dane kosztów są odtwarzane z pamięci bez zapytania.
+- **Koszty, bilans i encje sprzedaży** są pobierane co godzinę o :05:30, każdej godziny doby. Po 12:00 czekają, aż ceny na jutro będą pobrane. W godzinach poprzedzających zapytanie o ceny (23: odświeżenie o 00:05; od 11 do pobrania cen na jutro: sprawdzenia od 12:05) koszty zostawiają jedno zapytanie wolne, żeby ich ponowienia nie zablokowały cen. Po restarcie dane kosztów są odtwarzane z pamięci bez zapytania.
+
+- **Restart:** integracja wczytuje ceny z pamięci podręcznej. Jeśli są w niej dzisiejsze ceny, nie wysyła zapytania. Jeśli brakuje tylko cen na jutro (po 12:05), wysyła jedno.
+- **`button.pstryk_refresh_prices`** pobiera ceny kupna i sprzedaży jednym zapytaniem. Przy wykorzystanym limicie nic nie wysyła i pokazuje powiadomienie z godziną, o której zwolni się miejsce.
+- **`sensor.pstryk_prices_fetched`** pokazuje, kiedy ceny będące teraz w użyciu zostały pobrane z API. Atrybut `tomorrow_available` mówi, czy są już ceny na jutro.
 
 ### Pierwsze uruchomienie
 
 - **Po instalacji** (i po każdym starcie, gdy zapisane dane kosztów nie są już aktualne, np. Home Assistant był wyłączony przez noc) koszty są pobierane **od razu po starcie** – encje kosztowe i sprzedaży mają wartości po kilku sekundach.
 - Wyjątek: jeśli do najbliższego :05:30 zostało mniej niż 10 minut, integracja czeka na to pobranie (bez dodatkowego zapytania).
-- Start zużywa do 3 zapytań (ceny + koszty), więc najbliższe pobranie o :05:30 bywa pominięte; od następnej godziny wszystko wraca do rytmu :05:30. Dane w tym czasie są aktualne na moment startu.
+- Najpierw idzie zapytanie miesięczne (zasila dane miesięczne, roczne i wszystkie sumy `total`), potem dzienne.
+- Jeśli limit API nie ma miejsca na wszystko (np. kilka restartów w ciągu godziny), brakująca część jest **dociągana, gdy tylko zwolni się miejsce** w limicie (zwykle kilka–kilkadziesiąt minut), a nie dopiero o następnym :05:30. W dzienniku pojawia się wtedy informacja (nie błąd): `Cost data (...) will be fetched at HH:MM:SS, when the API limit frees`.
+- Dociąganie dotyczy tylko danych, których brakuje. Gdy dane są aktualne, a jakieś pobranie się nie zmieści, czekają na najbliższe :05:30 – dzięki temu limit nie jest stale przepełniony i integracja wraca do rytmu :05:30.
 - Restart przy aktualnych danych nie wysyła żadnego zapytania o koszty.
-- **Restart:** integracja wczytuje ceny z pamięci podręcznej. Jeśli są w niej dzisiejsze ceny, nie wysyła zapytania. Jeśli brakuje tylko cen na jutro (po 12:05), wysyła jedno.
-- **`button.pstryk_refresh_prices`** pobiera ceny kupna i sprzedaży jednym zapytaniem. Przy wykorzystanym limicie nic nie wysyła i pokazuje powiadomienie z godziną, o której zwolni się miejsce.
-- **`sensor.pstryk_prices_fetched`** pokazuje, kiedy ceny będące teraz w użyciu zostały pobrane z API. Atrybut `tomorrow_available` mówi, czy są już ceny na jutro.
 
 ### Sensory JSON (opcjonalne)
 

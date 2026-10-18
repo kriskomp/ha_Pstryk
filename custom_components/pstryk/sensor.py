@@ -185,8 +185,8 @@ async def async_setup_entry(
         ))
     for kind in ("sell_revenue", "energy_sold", "buy_cost", "energy_bought"):
         remaining_entities.append(PstrykTotalSellSensor(cost_coordinator, kind, entry.entry_id))
-    for period in ("monthly", "yearly", "total"):
-        remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, period, entry.entry_id))
+    # Monthly/yearly: the original sell averages above (same formula).
+    remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, "total", entry.entry_id))
 
     _LOGGER.info("Registering %d current price sensors with data and %d additional sensors as unavailable",
                  len(entities), len(remaining_entities))
@@ -698,6 +698,11 @@ class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
         self.period = period
         self.entry_id = entry_id
         self.entity_id = f"sensor.{DOMAIN}_{self.price_type}_{period}_average"
+        # Fork: only the sell monthly/yearly averages (the real average sell
+        # price) are enabled by default; the others can be enabled by the user.
+        self._attr_entity_registry_enabled_default = (
+            self.price_type == "sell" and period in ("monthly", "yearly")
+        )
         self._state = None
         self._energy_bought = 0.0
         self._energy_sold = 0.0
@@ -1229,15 +1234,16 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.period = period
         self.entry_id = entry_id
-        self.entity_id = f"sensor.{DOMAIN}_{period}_average_sell_price"
+        # Named like the original averages: sensor.pstryk_sell_total_average.
+        self.entity_id = f"sensor.{DOMAIN}_sell_{period}_average"
 
     @property
     def name(self) -> str:
-        return f"Pstryk {self.period.title()} Average Sell Price"
+        return f"Pstryk Sell {self.period.title()} Average"
 
     @property
     def unique_id(self) -> str:
-        return f"{DOMAIN}_average_sell_price_{self.period}"
+        return f"{DOMAIN}_sell_{self.period}_average"
 
     @property
     def device_info(self):

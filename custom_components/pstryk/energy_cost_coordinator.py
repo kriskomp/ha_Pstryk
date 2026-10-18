@@ -13,7 +13,7 @@ from .const import (
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_DELAY
 )
-from .api_client import PstrykAPIClient
+from .api_client import BudgetExhausted, PstrykAPIClient
 from .price_policy import (
     COST_KEEP_FREE,
     cost_keep_free,
@@ -28,6 +28,12 @@ COST_DATA_STORE_VERSION = 1
 
 # A saved period is restored only within the day, month or year it was fetched in.
 PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "yearly": "%Y", "history": "%Y"}
+
+# The two cost requests and the periods each one feeds. "month" goes first: it
+# feeds three periods and every total sensor, so it gets a lone free slot.
+COST_PARTS = {"month": ("monthly", "yearly", "history"), "day": ("daily",)}
+# A catch-up waits this long after the slot it needs frees.
+CATCH_UP_MARGIN = timedelta(seconds=3)
 
 
 def restorable_periods(saved, now):
@@ -50,6 +56,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         self.entry_id = entry_id
         self._unsub_hourly = None
         self._unsub_midnight = None
+        self._unsub_catch_up = None
+        # Parts the budget refused in the last run: {part: when a slot frees}.
+        self._blocked = {}
         # Set by sensor.py: cost waits until these have tomorrow's prices.
         self.price_coordinators = []
         # Slots each cost request leaves free for prices; set per run.
@@ -74,8 +83,12 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             name=f"{DOMAIN}_cost",
         )
 
-    async def _async_update_data(self):
-        _LOGGER.debug("Starting energy cost and usage data fetch")
+    async def _async_update_data(self, parts=("month", "day")):
+        """Fetch the given cost parts. A part the budget refuses is recorded in
+        self._blocked (normal, not an error); BudgetExhausted is raised only when
+        every part was refused and nothing was fetched."""
+        _LOGGER.debug("Starting energy cost and usage data fetch: %s", list(parts))
+        self._blocked = {}
 
         try:
             now = dt_util.now()
@@ -90,63 +103,63 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             format_time = lambda dt: dt_util.as_utc(dt).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             data = {}
+            failed = []
 
-            daily_url = API_URL + UNIFIED_METRICS_ENDPOINT.format(
-                resolution="day",
-                start=format_time(yesterday_start),
-                end=format_time(day_after_tomorrow),
-            )
+            async def fetch(part, url):
+                try:
+                    return await self.api_client.fetch(
+                        url,
+                        max_retries=self.retry_attempts,
+                        base_delay=self.retry_delay,
+                        keep_free=self._keep_free
+                    )
+                except BudgetExhausted as e:
+                    self._blocked[part] = e.free_at
+                    _LOGGER.info("Cost data (%s) waits for the API limit: %s", part, e)
+                except UpdateFailed as e:
+                    failed.append(part)
+                    _LOGGER.warning("Failed to fetch cost data (%s): %s", part, e)
+                return None
 
-            _LOGGER.debug(f"Fetching daily data from {yesterday_start} to {day_after_tomorrow}")
-
-            try:
-                daily_data = await self.api_client.fetch(
-                    daily_url,
-                    max_retries=self.retry_attempts,
-                    base_delay=self.retry_delay,
-                    keep_free=self._keep_free
-                )
-
-                if daily_data:
-                    data["daily"] = self._process_daily_data_simple(daily_data)
-            except UpdateFailed as e:
-                _LOGGER.warning(f"Failed to fetch daily data: {e}. Continuing with other resolutions.")
-
-            # One request covers the current year and the whole sell history:
-            # the window starts at SELL_HISTORY_START instead of 1 January.
-            # Same request count as before (Pstryk: 3 requests/h per endpoint).
-            y, m, d = SELL_HISTORY_START
-            history_start = min(year_start, today_start.replace(year=y, month=m, day=d))
-            yearly_url = API_URL + UNIFIED_METRICS_ENDPOINT.format(
-                resolution="month",
-                start=format_time(history_start),
-                end=format_time(next_year_start),
-            )
-
-            _LOGGER.debug(f"Fetching yearly data for {year_start.year}")
-
-            try:
-                yearly_data = await self.api_client.fetch(
-                    yearly_url,
-                    max_retries=self.retry_attempts,
-                    base_delay=self.retry_delay,
-                    keep_free=self._keep_free
-                )
-
-                if yearly_data:
-                    current_year = self._frames_of_year(yearly_data, now.year)
-                    data["yearly"] = self._process_yearly_data_simple(current_year)
-                    data["monthly"] = self._process_monthly_data_simple(current_year)
-                    data["history"] = self._process_sell_history(yearly_data)
-            except UpdateFailed as e:
-                _LOGGER.warning(f"Failed to fetch yearly data: {e}.")
+            for part in ("month", "day"):
+                if part not in parts:
+                    continue
+                if part == "month":
+                    # One request covers the current year and the whole sell history:
+                    # the window starts at SELL_HISTORY_START instead of 1 January.
+                    y, m, d = SELL_HISTORY_START
+                    history_start = min(year_start, today_start.replace(year=y, month=m, day=d))
+                    url = API_URL + UNIFIED_METRICS_ENDPOINT.format(
+                        resolution="month",
+                        start=format_time(history_start),
+                        end=format_time(next_year_start),
+                    )
+                    yearly_data = await fetch(part, url)
+                    if yearly_data:
+                        current_year = self._frames_of_year(yearly_data, now.year)
+                        data["yearly"] = self._process_yearly_data_simple(current_year)
+                        data["monthly"] = self._process_monthly_data_simple(current_year)
+                        data["history"] = self._process_sell_history(yearly_data)
+                else:
+                    url = API_URL + UNIFIED_METRICS_ENDPOINT.format(
+                        resolution="day",
+                        start=format_time(yesterday_start),
+                        end=format_time(day_after_tomorrow),
+                    )
+                    daily_data = await fetch(part, url)
+                    if daily_data:
+                        data["daily"] = self._process_daily_data_simple(daily_data)
 
             if data:
-                _LOGGER.debug(f"Successfully fetched energy cost and usage data for resolutions: {list(data.keys())}")
+                _LOGGER.debug("Fetched energy cost and usage data for: %s", list(data.keys()))
                 return data
-            else:
-                raise UpdateFailed("Failed to fetch energy cost data for any resolution")
+            if self._blocked and not failed:
+                free_at = min((t for t in self._blocked.values() if t), default=None)
+                raise BudgetExhausted("unified-metrics", free_at)
+            raise UpdateFailed("Failed to fetch energy cost data for any resolution")
 
+        except BudgetExhausted:
+            raise
         except Exception as err:
             _LOGGER.error("Error fetching energy cost data: %s", err, exc_info=True)
             raise UpdateFailed(f"Error fetching energy cost data: {err}")
@@ -405,44 +418,125 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             self.hass, self._handle_hourly_update, dt_util.as_utc(next_run)
         )
 
+    def _period_current(self, period, now) -> bool:
+        """Whether `period` holds data fetched within its own day, month or year."""
+        if period not in (self.data or {}):
+            return False
+        fetched = dt_util.parse_datetime(((self._saved or {}).get(period) or {}).get("fetched") or "")
+        if not fetched:
+            return False
+        fmt = PERIOD_FORMATS[period]
+        return dt_util.as_local(fetched).strftime(fmt) == now.strftime(fmt)
+
+    def missing_parts(self, now=None) -> list:
+        """Cost parts whose periods have no current data (sensors would be unavailable)."""
+        now = now or dt_util.now()
+        return [part for part, periods in COST_PARTS.items()
+                if not all(self._period_current(p, now) for p in periods)]
+
+    async def _async_run(self, parts, keep_free, reason) -> str:
+        """One cost fetch of `parts`; then a catch-up for parts still missing."""
+        self._keep_free = keep_free
+        try:
+            data = await self._async_update_data(parts)
+        except BudgetExhausted:
+            data = {}
+        except Exception as err:
+            _LOGGER.error("Cost update (%s) failed: %s - next try at :05:30", reason, err)
+            if not self.data:
+                self.last_update_success = False  # nothing to show; data kept otherwise
+            self._schedule_catch_up()
+            return "failed"
+        if data:
+            self.data = {**(self.data or {}), **data}
+            self.last_update_success = True
+            self.async_update_listeners()
+            await self._async_save(data)
+        self._schedule_catch_up()
+        if not data:
+            return "budget"
+        return "partial" if self._blocked else "fetched"
+
+    def _cancel_catch_up(self):
+        if self._unsub_catch_up:
+            self._unsub_catch_up()
+            self._unsub_catch_up = None
+
+    def _schedule_catch_up(self):
+        """A one-off fetch, when the budget frees, of parts with no current data.
+
+        Only for missing data (first install, restart after a long stop): a part
+        that still has current data waits for the regular :05:30 run, so
+        catch-ups never become an hourly habit that eats the next run's slots.
+        """
+        self._cancel_catch_up()
+        now = dt_util.now()
+        waiting = [p for p in self.missing_parts(now) if self._blocked.get(p)]
+        if not waiting:
+            return
+        run_at = min(self._blocked[p] for p in waiting) + CATCH_UP_MARGIN
+        # A regular run before it reschedules or cancels it (see _async_run).
+        _LOGGER.info("Cost data (%s) will be fetched at %s, when the API limit frees",
+                     ", ".join(waiting), dt_util.as_local(run_at).strftime("%H:%M:%S"))
+        self._unsub_catch_up = async_track_point_in_time(
+            self.hass, self._handle_catch_up, dt_util.as_utc(run_at)
+        )
+
+    async def _handle_catch_up(self, _):
+        self._unsub_catch_up = None
+        now = dt_util.now()
+        parts = self.missing_parts(now)
+        if not parts:
+            return
+        tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
+        await self._async_run(parts, cost_keep_free(now, tomorrow), "catch-up")
+
+    def _block_all_until_free(self, keep_free):
+        free_at = self.api_client.budget_free_at(keep_free=keep_free)
+        self._blocked = {part: free_at for part in COST_PARTS} if free_at else {}
+
     async def async_startup_refresh(self) -> str:
         """Fetch cost at start-up when the restored data does not cover every period.
 
         After a first install (nothing saved) or a long stop (a new day, month or
         year), the cost sensors would stay unavailable until the next :05:30.
-        Runs after the price start-up and only on budget the prices leave free.
+        Runs after the price start-up and only on budget the prices leave free;
+        what the budget refuses is caught up as soon as a slot frees.
         """
         now = dt_util.now()
-        missing = [p for p in ("daily", "monthly", "yearly", "history") if not (self.data or {}).get(p)]
+        missing = self.missing_parts(now)
         if not missing:
             _LOGGER.debug("Cost data restored for every period; next update at :05:30")
             return "restored"
         if not startup_cost_fetch_due(now, missing):
-            _LOGGER.debug("Cost data missing for %s; the :05:30 update is close", missing)
+            _LOGGER.debug("Cost data missing (%s); the :05:30 update is close", missing)
             return "next_run_soon"
         tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
         keep_free = cost_keep_free(now, tomorrow)
         if not self.api_client.budget_room_soon(keep_free=keep_free):
-            _LOGGER.info("Cost data missing for %s; API budget full, next try at :05:30", missing)
+            self._block_all_until_free(keep_free)
+            self._schedule_catch_up()
             return "budget"
-        self._keep_free = keep_free
-        _LOGGER.info("Cost data missing for %s; fetching now (start-up)", missing)
-        try:
-            data = await self._async_update_data()
-        except Exception as err:
-            _LOGGER.warning("Start-up cost fetch failed: %s - next try at :05:30", err)
-            return "failed"
-        self.data = {**(self.data or {}), **data}
-        self.last_update_success = True
-        self.async_update_listeners()
-        await self._async_save(data)
-        return "fetched"
+        _LOGGER.info("Cost data missing (%s); fetching now (start-up)", ", ".join(missing))
+        return await self._async_run(missing, keep_free, "start-up")
 
     async def _handle_hourly_update(self, now):
         local_now = dt_util.now()
         tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
         if not cost_run_allowed(local_now, tomorrow):
             _LOGGER.debug("Skipping cost update at %s: prices first", local_now.strftime("%H:%M"))
+            self.schedule_hourly_update()
+            return
+        keep_free = cost_keep_free(local_now, tomorrow)
+        try:
+            if not self.api_client.budget_room_soon(keep_free=keep_free):
+                _LOGGER.info("Cost update at %s waits for the API limit", local_now.strftime("%H:%M"))
+                self._block_all_until_free(keep_free)
+                self._schedule_catch_up()
+                return
+            _LOGGER.debug("Triggering cost update")
+            await self._async_run(tuple(COST_PARTS), keep_free, "hourly")
+        finally:
             self.schedule_hourly_update()
             return
         self._keep_free = cost_keep_free(local_now, tomorrow)

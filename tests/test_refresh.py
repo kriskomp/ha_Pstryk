@@ -730,8 +730,9 @@ def _new_cost(mods, env, client, coords, entry_id="e"):
 async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
     """Full run at 13:50 on Oct 2, daily only at 14:50, then a restart at `restart_at`.
 
-    Cost frames carry their request number: 12:05 prices is 1, 13:50 daily 2 and
-    yearly 3, the other call at 14:30 is 4, 14:50 daily 5.
+    Cost frames carry their request number: 12:05 prices is 1, 13:50 monthly 2 and
+    daily 3 (fork: the month request goes first), the other call at 14:30 is 4,
+    14:50 monthly 5.
     """
     env.hass.session.cost_frames = True
     # Fork: keep one slot as the original policy did, so the 14:50 run is partial.
@@ -745,7 +746,7 @@ async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
     await cost._handle_hourly_update(None)  # daily + yearly
     full = copy.deepcopy(cost.data)
     _set_clock(2026, 10, 2, 14, 30)
-    await client.fetch(  # another call leaves room for daily only at 14:50
+    await client.fetch(  # another call leaves room for one request only at 14:50
         "https://api.pstryk.pl/integrations/meter-data/unified-metrics/?metrics=cost", max_retries=1
     )
     _set_clock(2026, 10, 2, 14, 50)
@@ -763,13 +764,12 @@ async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
 def test_cost_data_survives_a_restart_without_a_request(mods, env):
     full, sent, restarted, _ = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
     assert sorted(full) == ["daily", "history", "monthly", "yearly"]
-    assert full["monthly"]["total_balance"] == 3
-    assert sent == 5  # the yearly call at 14:50 was refused
+    assert full["monthly"]["total_balance"] == 2
+    assert sent == 5  # the daily call at 14:50 was refused
     assert len(env.hass.session.sent) == sent  # restoring sent nothing
     assert restarted.last_update_success is True
-    assert restarted.data["daily"]["total_balance"] == 5  # from 14:50
-    assert restarted.data["monthly"] == full["monthly"]  # from 13:50, kept through the partial run
-    assert restarted.data["yearly"] == full["yearly"]
+    assert restarted.data["monthly"]["total_balance"] == 5  # from 14:50
+    assert restarted.data["daily"] == full["daily"]  # from 13:50, kept through the partial run
 
 
 def test_cost_data_of_another_entry_is_not_restored(mods, env):
@@ -1337,12 +1337,13 @@ def test_fork_restart_on_a_new_day_fetches_the_missing_day(mods, env):
         await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))
         restarted = _new_cost(mods, env, client, coords)
         await restarted.async_restore()
-        missing_daily = "daily" not in (restarted.data or {})
+        missing = restarted.missing_parts()
         before = len(env.hass.session.sent)
         result = await restarted.async_startup_refresh()
-        return missing_daily, result, len(env.hass.session.sent) - before
+        return missing, result, len(env.hass.session.sent) - before, sorted(restarted.data)
 
-    assert _run(scenario()) == (True, "fetched", 2)
+    # Only the day is missing (month and year still current): one request.
+    assert _run(scenario()) == (["day"], "fetched", 1, ["daily", "history", "monthly", "yearly"])
 
 
 def test_fork_start_just_before_the_hourly_run_waits_for_it(mods, env):
@@ -1351,3 +1352,120 @@ def test_fork_start_just_before_the_hourly_run_waits_for_it(mods, env):
         return result, sent
 
     assert _run(scenario()) == ("next_run_soon", 0)
+
+
+# Fork: catch-up of missing cost data when the API budget frees (log of 18.10.2026).
+
+def test_fork_restart_with_little_budget_catches_up_and_returns_to_the_rhythm(mods, env):
+    """First install 16:09:38 (prices), another request 16:20, restart with v2.2.0 at 16:38.
+
+    One slot is left at 16:38: the month request gets it (monthly, yearly, totals),
+    the day request waits. It is caught up as soon as a slot frees, not at 18:05:30.
+    """
+    env.hass.session.cost_frames = True
+
+    async def scenario():
+        _at(2, 16, 9, 38)
+        client, coords = await env.build()
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))  # 16:09:38
+        _at(2, 16, 20)
+        await client.fetch(
+            "https://api.pstryk.pl/integrations/meter-data/unified-metrics/?metrics=cost", max_retries=1
+        )
+        _at(2, 16, 38)
+        cost = _new_cost(mods, env, client, coords)
+        await cost.async_restore()
+        result = await cost.async_startup_refresh()
+        after_start = sorted(cost.data or {})
+        catch_up = SCHEDULED[-1]
+        # 17:05:30: the hourly run finds the budget full and books the catch-up again.
+        _at(2, 17, 5, 30)
+        await cost._handle_hourly_update(None)
+        when, callback = SCHEDULED[-1]
+        CLOCK[0] = when.astimezone(TZ)
+        await callback(None)
+        after_catch_up = sorted(cost.data or {}), CLOCK[0]
+        runs = []
+        for hour in (18, 19):
+            _at(2, hour, 5, 30)
+            before = len(env.hass.session.sent)
+            await cost._handle_hourly_update(None)
+            runs.append(len(env.hass.session.sent) - before)
+        return result, after_start, catch_up, after_catch_up, runs, cost
+
+    result, after_start, catch_up, (after, at), runs, cost = _run(scenario())
+    assert result == "partial"
+    assert after_start == ["history", "monthly", "yearly"]  # month first: totals at once
+    # The slot of 16:09:38 frees at 17:09:40 (1 h + 2 s margin, as in the log), catch-up 3 s later.
+    assert catch_up[0].astimezone(TZ) == datetime(2026, 10, 2, 17, 9, 43, tzinfo=TZ)
+    assert after == ["daily", "history", "monthly", "yearly"]
+    assert at < datetime(2026, 10, 2, 17, 10, tzinfo=TZ)  # daily by 17:10, not 18:05:30
+    assert runs == [2, 2]  # back in the :05:30 rhythm
+    assert cost.last_update_success is True
+    assert env.hass.session.max_in_any_hour() <= 3
+
+
+def test_fork_no_catch_up_when_every_period_is_current(mods, env):
+    async def scenario():
+        client, coords, cost, _, _ = await _first_start(mods, env, 2, 16, 11)
+        scheduled_before = len(SCHEDULED)
+        # 17:05:30: the start-up's 3 requests fill the budget, but every period is current.
+        _at(2, 17, 5, 30)
+        await cost._handle_hourly_update(None)
+        return [cb for _, cb in SCHEDULED[scheduled_before:] if getattr(cb, "__name__", "") == "_handle_catch_up"]
+
+    assert _run(scenario()) == []  # current data waits for 18:05:30; no extra request
+
+
+def test_fork_budget_refusal_is_not_logged_as_a_warning(mods, env, caplog):
+    import logging
+
+    async def scenario():
+        _at(2, 16, 9, 38)
+        client, coords = await env.build()
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))
+        _at(2, 16, 20)
+        await client.fetch(
+            "https://api.pstryk.pl/integrations/meter-data/unified-metrics/?metrics=cost", max_retries=1
+        )
+        _at(2, 16, 38)
+        cost = _new_cost(mods, env, client, coords)
+        await cost.async_restore()
+        with caplog.at_level(logging.INFO, logger="pstryk"):
+            await cost.async_startup_refresh()
+
+    _run(scenario())
+    cost_records = [r for r in caplog.records if r.name.endswith("energy_cost_coordinator")]
+    assert not [r for r in cost_records if r.levelno >= logging.WARNING]
+    assert any("waits for the API limit" in r.getMessage() for r in cost_records)
+
+
+def test_fork_average_sensors_enabled_by_default_only_for_sell_monthly_yearly(mods, env):
+    async def scenario():
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        return {
+            mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e").entity_id:
+                mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e")._attr_entity_registry_enabled_default
+            for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")
+        }
+
+    assert _run(scenario()) == {
+        "sensor.pstryk_buy_daily_average": False,
+        "sensor.pstryk_buy_monthly_average": False,
+        "sensor.pstryk_buy_yearly_average": False,
+        "sensor.pstryk_sell_daily_average": False,
+        "sensor.pstryk_sell_monthly_average": True,
+        "sensor.pstryk_sell_yearly_average": True,
+    }
+
+
+def test_fork_total_sell_average_is_named_like_the_original_averages(mods, env):
+    async def scenario():
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        s = mods.sensor.PstrykAverageSellPriceSensor(cost, "total", "e")
+        return s.entity_id, s.name, s.unique_id
+
+    assert _run(scenario()) == ("sensor.pstryk_sell_total_average", "Pstryk Sell Total Average",
+                                "pstryk_sell_total_average")
