@@ -1469,3 +1469,81 @@ def test_fork_total_sell_average_is_named_like_the_original_averages(mods, env):
 
     assert _run(scenario()) == ("sensor.pstryk_sell_total_average", "Pstryk Sell Total Average",
                                 "pstryk_sell_total_average")
+
+
+# Fork: the price cache lives in .storage, so a HACS update (which replaces the
+# integration folder) no longer costs a price request at the next start-up.
+
+def _real_cache_coords(mods, env, client, legacy_dir=None):
+    """Price coordinators with the real .storage cache (env.build patches it out)."""
+    coords = {}
+    for price_type in ("buy", "sell"):
+        coord = mods.uc.PstrykDataUpdateCoordinator(env.hass, client, price_type, False, 5, 30, "e")
+        if legacy_dir is not None:
+            coord._legacy_cache_file = str(legacy_dir / f"cache_{price_type}.json")
+        env.hass.data["pstryk"][f"e_{price_type}"] = coord
+        coords[price_type] = coord
+    return coords
+
+
+def test_fork_price_cache_survives_a_hacs_update_without_a_request(mods, env, tmp_path):
+    async def scenario():
+        _at(2, 12, 5)
+        client, _ = await env.build()
+        coords = _real_cache_coords(mods, env, client, tmp_path)
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))
+        written = sorted(k for k in STORE_DISK if k.startswith("pstryk_price_cache_"))
+        files = sorted(p.name for p in tmp_path.iterdir())
+        # HACS update: the integration folder is replaced; .storage stays. Restart at 15:00.
+        _at(2, 15, 0)
+        env.hass.data["pstryk"].clear()
+        client, _ = await env.build()
+        restarted = _real_cache_coords(mods, env, client, tmp_path)
+        before = len(env.hass.session.sent)
+        await asyncio.gather(*(c.async_startup() for c in restarted.values()))
+        return written, files, len(env.hass.session.sent) - before, restarted["buy"]
+
+    written, files, sent, buy = _run(scenario())
+    assert written == ["pstryk_price_cache_buy", "pstryk_price_cache_sell"]
+    assert files == []  # nothing written to the integration folder
+    assert sent == 0  # today's and tomorrow's prices from .storage
+    assert buy.today_usable(buy.data)
+
+
+def test_fork_old_cache_file_is_moved_to_storage_once(mods, env, tmp_path):
+    async def scenario():
+        # An install of the original (or v2.2.2) left cache files in the integration folder.
+        _at(2, 12, 5)
+        client, _ = await env.build()
+        old = _real_cache_coords(mods, env, client, tmp_path)
+        await asyncio.gather(*(c.async_request_refresh() for c in old.values()))
+        for price_type in ("buy", "sell"):
+            data = STORE_DISK.pop(f"pstryk_price_cache_{price_type}")
+            (tmp_path / f"cache_{price_type}.json").write_text(json.dumps(data))
+        _at(2, 15, 0)
+        env.hass.data["pstryk"].clear()
+        client, _ = await env.build()
+        restarted = _real_cache_coords(mods, env, client, tmp_path)
+        before = len(env.hass.session.sent)
+        await asyncio.gather(*(c.async_startup() for c in restarted.values()))
+        return (len(env.hass.session.sent) - before, sorted(p.name for p in tmp_path.iterdir()),
+                sorted(k for k in STORE_DISK if k.startswith("pstryk_price_cache_")), restarted["buy"])
+
+    sent, files, stores, buy = _run(scenario())
+    assert sent == 0  # the moved cache is used right away
+    assert files == []  # old files removed
+    assert stores == ["pstryk_price_cache_buy", "pstryk_price_cache_sell"]
+    assert buy.today_usable(buy.data)
+
+
+def test_fork_invalid_old_cache_file_is_not_used(mods, env, tmp_path):
+    async def scenario():
+        _at(2, 15, 0)
+        (tmp_path / "cache_buy.json").write_text(json.dumps({"invalid": True, "reason": "midnight_fetch_failed"}))
+        client, _ = await env.build()
+        coords = _real_cache_coords(mods, env, client, tmp_path)
+        return await coords["buy"]._load_cache(), sorted(p.name for p in tmp_path.iterdir())
+
+    cached, files = _run(scenario())
+    assert cached is None
+    assert files == []

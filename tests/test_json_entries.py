@@ -86,7 +86,7 @@ def _stubs():
         "homeassistant.helpers.event": _stub(
             "homeassistant.helpers.event", async_track_point_in_time=lambda *a, **k: None
         ),
-        "homeassistant.helpers.storage": _stub("homeassistant.helpers.storage", Store=object),
+        "homeassistant.helpers.storage": _stub("homeassistant.helpers.storage", Store=_MemoryStore),
         "homeassistant.helpers.restore_state": _stub(
             "homeassistant.helpers.restore_state", RestoreEntity=type("RestoreEntity", (), {})
         ),
@@ -141,9 +141,23 @@ class _FakeAPI:
         return copy.deepcopy(self.response)
 
 
+class _MemoryStore:
+    """Stand-in for homeassistant.helpers.storage.Store (fork: price cache in .storage)."""
+
+    def __init__(self, hass, version, key, *args, **kwargs):
+        self.key = key
+        self.data = None
+
+    async def async_load(self):
+        return copy.deepcopy(self.data)
+
+    async def async_save(self, data):
+        self.data = copy.deepcopy(data)
+
+
 def _fetch(mods, tmp_path, response, price_type):
     coordinator = mods.uc.PstrykDataUpdateCoordinator(None, _FakeAPI(response), price_type)
-    coordinator._cache_file = str(tmp_path / f"cache_{price_type}.json")
+    coordinator._legacy_cache_file = str(tmp_path / f"cache_{price_type}.json")
     coordinator.data = asyncio.run(coordinator._async_update_data())
     sensor = mods.sensor.PstrykJsonPriceSensor(coordinator, price_type, "entry")
     return coordinator, sensor
@@ -157,8 +171,9 @@ def test_entries_carry_components(mods, tmp_path, price_type):
     assert len(attrs["prices_tomorrow"]) == 24
     for entry in attrs["prices"]:
         assert list(entry) == ["time", "price", *mods.pc.entry_keys(price_type)]
-    cached = json.loads(Path(coordinator._cache_file).read_text())
+    cached = coordinator._store.data  # fork: the cache is in .storage
     assert cached["prices"] == coordinator.data["prices"]
+    assert not Path(coordinator._legacy_cache_file).exists()  # nothing in the integration folder
 
 
 def test_buy_entry_at_13_local(mods, tmp_path):
