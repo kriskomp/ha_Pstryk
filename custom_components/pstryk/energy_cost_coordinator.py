@@ -14,7 +14,13 @@ from .const import (
     DEFAULT_RETRY_DELAY
 )
 from .api_client import PstrykAPIClient
-from .price_policy import COST_KEEP_FREE, cost_keep_free, cost_run_allowed, next_cost_run
+from .price_policy import (
+    COST_KEEP_FREE,
+    cost_keep_free,
+    cost_run_allowed,
+    next_cost_run,
+    startup_cost_fetch_due,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -398,6 +404,39 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         self._unsub_hourly = async_track_point_in_time(
             self.hass, self._handle_hourly_update, dt_util.as_utc(next_run)
         )
+
+    async def async_startup_refresh(self) -> str:
+        """Fetch cost at start-up when the restored data does not cover every period.
+
+        After a first install (nothing saved) or a long stop (a new day, month or
+        year), the cost sensors would stay unavailable until the next :05:30.
+        Runs after the price start-up and only on budget the prices leave free.
+        """
+        now = dt_util.now()
+        missing = [p for p in ("daily", "monthly", "yearly", "history") if not (self.data or {}).get(p)]
+        if not missing:
+            _LOGGER.debug("Cost data restored for every period; next update at :05:30")
+            return "restored"
+        if not startup_cost_fetch_due(now, missing):
+            _LOGGER.debug("Cost data missing for %s; the :05:30 update is close", missing)
+            return "next_run_soon"
+        tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
+        keep_free = cost_keep_free(now, tomorrow)
+        if not self.api_client.budget_room_soon(keep_free=keep_free):
+            _LOGGER.info("Cost data missing for %s; API budget full, next try at :05:30", missing)
+            return "budget"
+        self._keep_free = keep_free
+        _LOGGER.info("Cost data missing for %s; fetching now (start-up)", missing)
+        try:
+            data = await self._async_update_data()
+        except Exception as err:
+            _LOGGER.warning("Start-up cost fetch failed: %s - next try at :05:30", err)
+            return "failed"
+        self.data = {**(self.data or {}), **data}
+        self.last_update_success = True
+        self.async_update_listeners()
+        await self._async_save(data)
+        return "fetched"
 
     async def _handle_hourly_update(self, now):
         local_now = dt_util.now()

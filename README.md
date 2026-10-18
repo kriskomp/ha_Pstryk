@@ -1,15 +1,32 @@
 dev support:
 💡 Odbierz 50 zł na prąd w Pstryk!
-Użyj mojego kodu E3WOTQ w koszyku w aplikacji. Bonus trafi do Twojego Portfela Pstryk po pierwszej opłaconej fakturze!
+Użyj mojego kodu 1ML2X7 w koszyku w aplikacji. Bonus trafi do Twojego Portfela Pstryk po pierwszej opłaconej fakturze!
 
 # Integracja Home Assistant z Pstryk API
 
 !!! Dedykowana Karta do integracji:
 https://github.com/balgerion/ha_Pstryk_card
 
-[![Wersja](https://img.shields.io/badge/wersja-2.1.4-blue)](https://github.com/balgerion/ha_Pstryk/)
+[![Wersja](https://img.shields.io/badge/wersja-2.1.4-blue)](https://github.com/kriskomp/ha_Pstryk/)
 
 Integracja dla Home Assistant umożliwiająca śledzenie aktualnych cen energii elektrycznej oraz prognoz z platformy Pstryk.
+
+## Czym ten fork różni się od oryginału
+
+To jest fork integracji [balgerion/ha_Pstryk](https://github.com/balgerion/ha_Pstryk) (licencja MIT) – podziękowania dla autora oryginału. Domena integracji (`pstryk`) i wszystkie encje oryginału zostają bez zmian, więc fork można zainstalować w miejsce oryginału bez utraty encji i ich historii.
+
+| | Oryginał (balgerion, 2.1.4) | Ten fork (kriskomp) |
+|---|---|---|
+| Limit API Pstryk (3 zapytania/h na endpoint) | nie liczony – restarty, ponowienia i automatyzacje z `update_entity` mogą go przekroczyć (błąd 429) | pilnowany: jeden licznik dla wszystkich zapytań, zapisywany na czas restartu (z [PR #30](https://github.com/balgerion/ha_Pstryk/pull/30) autorstwa mnarozny) |
+| Ceny | z pamięci; zapytanie o 00:01 | z pamięci; zapytanie o 00:05 i przy sprawdzaniu cen na jutro |
+| Ceny na jutro | od 14:00 (tryb 48h) albo dopiero o 00:01 | od 12:05, co 20 minut do skutku, w każdym trybie |
+| Składniki ceny w `sensor.pstryk_json_buy` / `_sell` | brak | `tge_price`, dystrybucja, opłata, VAT, akcyza (z [PR #29](https://github.com/balgerion/ha_Pstryk/pull/29) autorstwa mnarozny) |
+| Koszty, bilanse, średnie | co godzinę o :01 | co godzinę o :05:30 (dane godziny są w API do 3 min po jej końcu), po restarcie odtwarzane z pamięci |
+| Koszty po starcie Home Assistanta | pobierane przy każdym starcie (po ok. 15 s) | pobierane od razu tylko wtedy, gdy brak aktualnych danych (np. pierwsza instalacja); inaczej z pamięci, bez zapytania (patrz [Pierwsze uruchomienie](#pierwsze-uruchomienie)) |
+| Przepływy energii i pieniędzy | tylko w atrybutach bilansu | 17 osobnych encji: dzienne kupno/sprzedaż (kWh, PLN), sprzedaż miesięczna/roczna, sumy od 01.10.2024 i rzeczywista średnia cena sprzedaży – patrz [Encje przepływów i sprzedaży](#encje-przepływów-i-sprzedaży-fork-kriskompha_pstryk) |
+| Odświeżanie ręczne | brak | `button.pstryk_refresh_prices` (pilnuje limitu) i `sensor.pstryk_prices_fetched` |
+
+**Uwaga przy przejściu z oryginału:** wyłącz automatyzacje, które co godzinę wywołują `homeassistant.update_entity` na sensorach Pstryk – każde takie wywołanie to zapytanie do API, które zabiera miejsce w limicie. Do ręcznego odświeżenia służy `button.pstryk_refresh_prices`.
 
 ## Status API
 
@@ -40,7 +57,7 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 ### Metoda 1: Via HACS
 1. W HACS przejdź do `Integracje`
 2. Kliknij `Dodaj repozytorium`
-3. Wpisz URL: `https://github.com/balgerion/ha_Pstryk`
+3. Wpisz URL: `https://github.com/kriskomp/ha_Pstryk`
 4. Wybierz kategorię: `Integration`
 5. Zainstaluj i zrestartuj Home Assistant
 
@@ -112,6 +129,13 @@ Pstryk pozwala na 3 zapytania na godzinę na endpoint ([regulamin API](https://p
 - **Ceny na jutro** są sprawdzane o 12:05, 12:25, 12:45 i dalej co 20 minut, aż się pojawią. Jedno sprawdzenie to jedno zapytanie dla kupna i sprzedaży, bez ponowień. Działa to w każdym trybie i zastępuje sprawdzanie między 14:00 a 15:00.
 - **O 00:05** odświeżane są ceny na nowy dzień (są już w pamięci jako wczorajsze „ceny na jutro”; nieudane odświeżenie ich nie kasuje).
 - **Koszty, średnie, bilans i encje sprzedaży** są pobierane co godzinę o :05:30, każdej godziny doby. Po 12:00 czekają, aż ceny na jutro będą pobrane. W godzinach poprzedzających zapytanie o ceny (23: odświeżenie o 00:05; od 11 do pobrania cen na jutro: sprawdzenia od 12:05) koszty zostawiają jedno zapytanie wolne, żeby ich ponowienia nie zablokowały cen. Po restarcie dane kosztów są odtwarzane z pamięci bez zapytania.
+
+### Pierwsze uruchomienie
+
+- **Po instalacji** (i po każdym starcie, gdy zapisane dane kosztów nie są już aktualne, np. Home Assistant był wyłączony przez noc) koszty są pobierane **od razu po starcie** – encje kosztowe i sprzedaży mają wartości po kilku sekundach.
+- Wyjątek: jeśli do najbliższego :05:30 zostało mniej niż 10 minut, integracja czeka na to pobranie (bez dodatkowego zapytania).
+- Start zużywa do 3 zapytań (ceny + koszty), więc najbliższe pobranie o :05:30 bywa pominięte; od następnej godziny wszystko wraca do rytmu :05:30. Dane w tym czasie są aktualne na moment startu.
+- Restart przy aktualnych danych nie wysyła żadnego zapytania o koszty.
 - **Restart:** integracja wczytuje ceny z pamięci podręcznej. Jeśli są w niej dzisiejsze ceny, nie wysyła zapytania. Jeśli brakuje tylko cen na jutro (po 12:05), wysyła jedno.
 - **`button.pstryk_refresh_prices`** pobiera ceny kupna i sprzedaży jednym zapytaniem. Przy wykorzystanym limicie nic nie wysyła i pokazuje powiadomienie z godziną, o której zwolni się miejsce.
 - **`sensor.pstryk_prices_fetched`** pokazuje, kiedy ceny będące teraz w użyciu zostały pobrane z API. Atrybut `tomorrow_available` mówi, czy są już ceny na jutro.
