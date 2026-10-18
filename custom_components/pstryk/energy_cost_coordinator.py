@@ -1,8 +1,9 @@
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.storage import Store
 import homeassistant.util.dt as dt_util
 from .const import (
     DOMAIN,
@@ -13,19 +14,45 @@ from .const import (
     DEFAULT_RETRY_DELAY
 )
 from .api_client import PstrykAPIClient
+from .price_policy import COST_KEEP_FREE, cost_keep_free, cost_run_allowed, next_cost_run
 
 _LOGGER = logging.getLogger(__name__)
+
+COST_DATA_STORE_VERSION = 1
+
+# A saved period is restored only within the day, month or year it was fetched in.
+PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "yearly": "%Y", "history": "%Y"}
+
+
+def restorable_periods(saved, now):
+    """The saved periods still current at `now` (local), as coordinator data."""
+    restored = {}
+    for period, fmt in PERIOD_FORMATS.items():
+        entry = (saved or {}).get(period)
+        if not isinstance(entry, dict) or not entry.get("data"):
+            continue
+        fetched = dt_util.parse_datetime(entry.get("fetched") or "")
+        if fetched and dt_util.as_local(fetched).strftime(fmt) == now.strftime(fmt):
+            restored[period] = entry["data"]
+    return restored
 
 
 class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
 
-    def __init__(self, hass: HomeAssistant, api_client: PstrykAPIClient, retry_attempts=None, retry_delay=None):
+    def __init__(self, hass: HomeAssistant, api_client: PstrykAPIClient, retry_attempts=None, retry_delay=None, entry_id=None):
         self.api_client = api_client
+        self.entry_id = entry_id
         self._unsub_hourly = None
         self._unsub_midnight = None
-        # All-time sell history, refreshed only at startup and at midnight
-        # (never by hourly updates or update_entity calls).
-        self.sell_history = None
+        # Set by sensor.py: cost waits until these have tomorrow's prices.
+        self.price_coordinators = []
+        # Slots each cost request leaves free for prices; set per run.
+        self._keep_free = COST_KEEP_FREE
+        # The last data fetched per period, kept across restarts: cost runs only
+        # at :05:30 on leftover budget, so the sensors would otherwise stay empty
+        # for up to an hour after every restart.
+        self._store = Store(hass, COST_DATA_STORE_VERSION, f"{DOMAIN}_cost_data")
+        self._saved = {}
 
         if retry_attempts is None:
             retry_attempts = DEFAULT_RETRY_ATTEMPTS
@@ -70,7 +97,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 daily_data = await self.api_client.fetch(
                     daily_url,
                     max_retries=self.retry_attempts,
-                    base_delay=self.retry_delay
+                    base_delay=self.retry_delay,
+                    keep_free=self._keep_free
                 )
 
                 if daily_data:
@@ -78,9 +106,14 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             except UpdateFailed as e:
                 _LOGGER.warning(f"Failed to fetch daily data: {e}. Continuing with other resolutions.")
 
+            # One request covers the current year and the whole sell history:
+            # the window starts at SELL_HISTORY_START instead of 1 January.
+            # Same request count as before (Pstryk: 3 requests/h per endpoint).
+            y, m, d = SELL_HISTORY_START
+            history_start = min(year_start, today_start.replace(year=y, month=m, day=d))
             yearly_url = API_URL + UNIFIED_METRICS_ENDPOINT.format(
                 resolution="month",
-                start=format_time(year_start),
+                start=format_time(history_start),
                 end=format_time(next_year_start),
             )
 
@@ -90,12 +123,15 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 yearly_data = await self.api_client.fetch(
                     yearly_url,
                     max_retries=self.retry_attempts,
-                    base_delay=self.retry_delay
+                    base_delay=self.retry_delay,
+                    keep_free=self._keep_free
                 )
 
                 if yearly_data:
-                    data["yearly"] = self._process_yearly_data_simple(yearly_data)
-                    data["monthly"] = self._process_monthly_data_simple(yearly_data)
+                    current_year = self._frames_of_year(yearly_data, now.year)
+                    data["yearly"] = self._process_yearly_data_simple(current_year)
+                    data["monthly"] = self._process_monthly_data_simple(current_year)
+                    data["history"] = self._process_sell_history(yearly_data)
             except UpdateFailed as e:
                 _LOGGER.warning(f"Failed to fetch yearly data: {e}.")
 
@@ -147,6 +183,38 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
 
     def _normalized_frames(self, response):
         return [self._normalize_frame(frame) for frame in response.get("frames", [])]
+
+    def _frames_of_year(self, response, year):
+        """The response limited to frames starting in the given local year."""
+        def local_year(frame):
+            parsed = dt_util.parse_datetime(frame.get("start") or "")
+            return dt_util.as_local(parsed).year if parsed else None
+        return {**response,
+                "frames": [f for f in response.get("frames", []) if local_year(f) == year]}
+
+    def _process_sell_history(self, response):
+        """Real totals per local year: sold/bought energy (kWh), sell revenue and buy cost (PLN)."""
+        years = {}
+        for frame in self._normalized_frames(response):
+            parsed = dt_util.parse_datetime(frame.get("start") or "")
+            if not parsed:
+                continue
+            year = str(dt_util.as_local(parsed).year)
+            entry = years.setdefault(year, {"sell_revenue": 0.0, "energy_sold": 0.0,
+                                            "buy_cost": 0.0, "energy_bought": 0.0})
+            entry["sell_revenue"] += frame.get("energy_sold_value", 0) or 0
+            entry["energy_sold"] += frame.get("rae", 0) or 0
+            # Same sum as the yearly total_cost / fae_usage of the current year.
+            entry["buy_cost"] += abs(frame.get("fae_cost", 0) or 0)
+            entry["energy_bought"] += frame.get("fae_usage", 0) or 0
+        for entry in years.values():
+            for key in ("sell_revenue", "buy_cost"):
+                entry[key] = round(entry[key], 2)
+            for key in ("energy_sold", "energy_bought"):
+                entry[key] = round(entry[key], 3)
+        _LOGGER.info("Sell history loaded: %s", years)
+        return {"years": dict(sorted(years.items())),
+                "fetched_at": dt_util.now().isoformat()}
 
     def _process_monthly_data_simple(self, response):
         _LOGGER.info("Processing monthly data - simple version")
@@ -287,99 +355,44 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "rae_usage": rae_usage
         }
 
-    async def async_refresh_sell_history(self):
-        """Fetch monthly sell data since SELL_HISTORY_START in one request.
-
-        Result is grouped per local calendar year. On failure the previous
-        history is kept, so the total sensor keeps its last good value.
-        """
+    async def async_restore(self):
+        """Serve the last saved data until the next cost run. Sends no request."""
         try:
-            start_local = dt_util.start_of_local_day(date(*SELL_HISTORY_START))
-            now = dt_util.now()
-            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            end_local = dt_util.start_of_local_day(
-                (month_start + timedelta(days=32)).replace(day=1).date()
-            )
-
-            format_time = lambda dt: dt_util.as_utc(dt).strftime("%Y-%m-%dT%H:%M:%SZ")
-            url = API_URL + UNIFIED_METRICS_ENDPOINT.format(
-                resolution="month",
-                start=format_time(start_local),
-                end=format_time(end_local),
-            )
-
-            _LOGGER.debug("Fetching sell history from %s to %s", start_local, end_local)
-            response = await self.api_client.fetch(
-                url,
-                max_retries=self.retry_attempts,
-                base_delay=self.retry_delay
-            )
-            if not response:
-                raise UpdateFailed("Empty sell history response")
-
-            years = {}
-            for frame in self._normalized_frames(response):
-                parsed = dt_util.parse_datetime(frame.get("start") or "")
-                if not parsed:
-                    continue
-                year = str(dt_util.as_local(parsed).year)
-                entry = years.setdefault(year, {"sell_revenue": 0.0, "energy_sold": 0.0})
-                entry["sell_revenue"] += frame.get("energy_sold_value", 0) or 0
-                entry["energy_sold"] += frame.get("rae", 0) or 0
-
-            for entry in years.values():
-                entry["sell_revenue"] = round(entry["sell_revenue"], 2)
-                entry["energy_sold"] = round(entry["energy_sold"], 3)
-
-            self.sell_history = {
-                "years": dict(sorted(years.items())),
-                "fetched_at": dt_util.now(),
-            }
-            _LOGGER.info("Sell history loaded: %s", self.sell_history["years"])
+            self._saved = await self._store.async_load() or {}
         except Exception as err:
-            _LOGGER.warning("Failed to fetch sell history: %s. Keeping previous value.", err)
-
-    def schedule_midnight_update(self):
-        if hasattr(self, '_unsub_midnight'):
-            if self._unsub_midnight:
-                self._unsub_midnight()
-                self._unsub_midnight = None
-        else:
-            self._unsub_midnight = None
-
-        now = dt_util.now()
-        next_mid = (now + timedelta(days=1)).replace(hour=0, minute=1, second=0, microsecond=0)
-
-        _LOGGER.debug("Scheduling next midnight cost update at %s",
-                     next_mid.strftime("%Y-%m-%d %H:%M:%S"))
-
-        self._unsub_midnight = async_track_point_in_time(
-            self.hass, self._handle_midnight_update, dt_util.as_utc(next_mid)
-        )
-
-    async def _handle_midnight_update(self, _):
-        _LOGGER.debug("Running scheduled midnight cost update (all resolutions)")
-        try:
-            data = await self._async_update_data()
-            self.data = data
+            _LOGGER.warning("Failed to load saved cost data: %s", err)
+            self._saved = {}
+        # Like the price cache: the store outlives its entry, and an entry added
+        # later may belong to another account.
+        if self._saved and self._saved.get("owner") != self.entry_id:
+            _LOGGER.info("Saved cost data was written by another entry; not using it")
+            self._saved = {}
+        restored = restorable_periods(self._saved, dt_util.now())
+        if restored:
+            self.data = restored
             self.last_update_success = True
-            await self.async_refresh_sell_history()
-            self.async_update_listeners()
+            _LOGGER.debug("Restored cost data for %s", sorted(restored))
+
+    async def _async_save(self, data):
+        fetched = dt_util.utcnow().isoformat()
+        self._saved["owner"] = self.entry_id
+        for period, period_data in data.items():
+            self._saved[period] = {"fetched": fetched, "data": period_data}
+        try:
+            await self._store.async_save(self._saved)
         except Exception as err:
-            _LOGGER.error("Midnight cost update failed: %s - will retry next hour", err)
-            self.last_update_success = False
-        finally:
-            self.schedule_midnight_update()
+            _LOGGER.warning("Failed to save cost data: %s", err)
 
     def schedule_hourly_update(self):
         if self._unsub_hourly:
             self._unsub_hourly()
             self._unsub_hourly = None
 
-        now = dt_util.now()
-        next_run = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1, minutes=1))
+        # Prices come first. Cost runs every hour at :05:30, after the price
+        # requests of :05:00, on the budget the prices don't need.
+        next_run = next_cost_run(dt_util.now())
 
-        _LOGGER.debug("Scheduling next hourly cost update at %s",
+        _LOGGER.debug("Scheduling next cost update at %s",
                      next_run.strftime("%Y-%m-%d %H:%M:%S"))
 
         self._unsub_hourly = async_track_point_in_time(
@@ -387,12 +400,25 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         )
 
     async def _handle_hourly_update(self, now):
-        _LOGGER.debug("Triggering hourly cost update")
+        local_now = dt_util.now()
+        tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
+        if not cost_run_allowed(local_now, tomorrow):
+            _LOGGER.debug("Skipping cost update at %s: prices first", local_now.strftime("%H:%M"))
+            self.schedule_hourly_update()
+            return
+        self._keep_free = cost_keep_free(local_now, tomorrow)
+        if not self.api_client.budget_room_soon(keep_free=self._keep_free):
+            _LOGGER.debug("Skipping cost update at %s: API budget kept for prices", local_now.strftime("%H:%M"))
+            self.schedule_hourly_update()
+            return
+
+        _LOGGER.debug("Triggering cost update")
         try:
             data = await self._async_update_data()
             self.data = {**(self.data or {}), **data}
             self.last_update_success = True
             self.async_update_listeners()
+            await self._async_save(data)
         except Exception as err:
             _LOGGER.error("Hourly cost update failed: %s - will retry next hour", err)
             self.last_update_success = False

@@ -25,7 +25,8 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 - Średnia cena z pozostałej ilości godzin do końca doby  
 - Średnia cena wschód/zachód  
 - Automatyczna konwersja czasu UTC → lokalny  
-- Dane są aktualizowane minutę po pełnej godzinie  
+- Ceny na jutro pobierane od 12:05; integracja pilnuje limitu 3 zapytań API na godzinę (patrz [Limit API i harmonogram pobierania](#limit-api-i-harmonogram-pobierania))  
+- Przycisk do ręcznego odświeżenia cen i sensor z czasem ich pobrania  
 - Konfiguracja z poziomu integracji  
 - Walidacja klucza API / Cache danych / Zabezpieczenie przed timeoutem API  
 - Integracja wystawia po lokalnym MQTT tablice cen w natywnym formacie EVCC  
@@ -84,10 +85,57 @@ Integracja korzysta  z nowego endpointu `unified-metrics`
 | `sensor.pstryk_yearly_financial_balance` | Roczny bilans kupna/sprzedaży                |
 | `sensor.pstryk_json_buy`                | Ceny kupna 48h w formacie JSON (opcjonalny)  |
 | `sensor.pstryk_json_sell`               | Ceny sprzedaży 48h w formacie JSON (opcjonalny) |
+| `sensor.pstryk_prices_fetched`          | Czas pobrania z API cen, które są teraz w użyciu |
+| `button.pstryk_refresh_prices`          | Jednorazowe pobranie cen kupna i sprzedaży   |
+
+### Encje przepływów i sprzedaży (fork kriskomp/ha_Pstryk)
+
+Wszystkie wartości pochodzą z danych rozliczeniowych Pstryk (`unified-metrics`), bez dodatkowych zapytań do API.
+
+| Okres | Energia kupiona (kWh) | Koszt zakupu (PLN) | Energia sprzedana (kWh) | Przychód ze sprzedaży (PLN) | Średnia cena sprzedaży (PLN/kWh) |
+|---|---|---|---|---|---|
+| Dzień | `sensor.pstryk_daily_energy_bought` | `sensor.pstryk_daily_buy_cost` | `sensor.pstryk_daily_energy_sold` | `sensor.pstryk_daily_sell_revenue` | – |
+| Miesiąc | – | – | `sensor.pstryk_monthly_energy_sold` | `sensor.pstryk_monthly_sell_revenue` | `sensor.pstryk_monthly_average_sell_price` |
+| Rok | – | – | `sensor.pstryk_yearly_energy_sold` | `sensor.pstryk_yearly_sell_revenue` | `sensor.pstryk_yearly_average_sell_price` |
+| Całość | `sensor.pstryk_total_energy_bought` | `sensor.pstryk_total_buy_cost` | `sensor.pstryk_total_energy_sold` | `sensor.pstryk_total_sell_revenue` | `sensor.pstryk_total_average_sell_price` |
+
+- **Całość** liczona jest od 01.10.2024 (start Pstryk); miesiące sprzed umowy API zwraca jako zera. Atrybuty sensorów `total` zawierają rozbicie per rok.
+- **Średnia cena sprzedaży** = przychód ÷ kWh sprzedane w tym samym okresie (średnia ważona, rzeczywista). Gdy nic nie sprzedano, sensor nie ma wartości.
+- **Do statystyk i wykresów długoterminowych używaj sensorów `total`.** Nie zerują się, więc nic nie ginie: dane godziny pojawiają się w API do 3 minut po jej zamknięciu i trafiają do statystyk z przesunięciem o jedną godzinę (ostatnia godzina doby wpada do statystyk następnego dnia). Sensory dzienne zerują się o północy i są podglądem bieżącej doby – ostatnia godzina doby nie zdąży do nich trafić.
+
+### Limit API i harmonogram pobierania
+
+Pstryk pozwala na 3 zapytania na godzinę na endpoint ([regulamin API](https://pstryk.pl/regulaminy?doc=regulamin-api)). Ceny i koszty korzystają z tego samego endpointu `unified-metrics`, więc integracja liczy każde wysłane zapytanie (także ponowienia i sprawdzenie klucza API przy konfiguracji) w jednym limicie z ostatnich 60 minut. Gdy limit jest wykorzystany, zapytanie nie jest wysyłane. Historia zapytań jest zapisywana, więc restart Home Assistanta jej nie zeruje. Wyjątek: po nagłym zatrzymaniu Home Assistanta (awaria, zanik zasilania) tuż po wysłaniu zapytania zapisany czas może być o kilka sekund wcześniejszy od rzeczywistego, więc na granicy godziny może wyjść czwarte zapytanie.
+
+- **Ceny mają pierwszeństwo.** Pobranie cen może użyć każdego wolnego zapytania. Przy wykorzystanym limicie sensory cen zostają przy dotychczasowych danych, a pobranie rusza, gdy zwolni się miejsce.
+- **Jeden rytm co godzinę o :05:** najpierw ceny (o :05:00, tylko gdy są potrzebne), potem koszty (o :05:30). Pstryk udostępnia dane zamkniętej godziny do 3 minut po jej końcu, a godzina w trakcie nie ma jeszcze danych.
+- **Ceny na jutro** są sprawdzane o 12:05, 12:25, 12:45 i dalej co 20 minut, aż się pojawią. Jedno sprawdzenie to jedno zapytanie dla kupna i sprzedaży, bez ponowień. Działa to w każdym trybie i zastępuje sprawdzanie między 14:00 a 15:00.
+- **O 00:05** odświeżane są ceny na nowy dzień (są już w pamięci jako wczorajsze „ceny na jutro”; nieudane odświeżenie ich nie kasuje).
+- **Koszty, średnie, bilans i encje sprzedaży** są pobierane co godzinę o :05:30, każdej godziny doby. Po 12:00 czekają, aż ceny na jutro będą pobrane. W godzinach poprzedzających zapytanie o ceny (23: odświeżenie o 00:05; od 11 do pobrania cen na jutro: sprawdzenia od 12:05) koszty zostawiają jedno zapytanie wolne, żeby ich ponowienia nie zablokowały cen. Po restarcie dane kosztów są odtwarzane z pamięci bez zapytania.
+- **Restart:** integracja wczytuje ceny z pamięci podręcznej. Jeśli są w niej dzisiejsze ceny, nie wysyła zapytania. Jeśli brakuje tylko cen na jutro (po 12:05), wysyła jedno.
+- **`button.pstryk_refresh_prices`** pobiera ceny kupna i sprzedaży jednym zapytaniem. Przy wykorzystanym limicie nic nie wysyła i pokazuje powiadomienie z godziną, o której zwolni się miejsce.
+- **`sensor.pstryk_prices_fetched`** pokazuje, kiedy ceny będące teraz w użyciu zostały pobrane z API. Atrybut `tomorrow_available` mówi, czy są już ceny na jutro.
 
 ### Sensory JSON (opcjonalne)
 
 Po włączeniu opcji **"Włącz sensory JSON z cenami"** w ustawieniach integracji pojawiają się sensory `sensor.pstryk_json_buy` i `sensor.pstryk_json_sell` z atrybutami `prices_today`, `prices_tomorrow` i `prices` (48h) w ustandaryzowanym formacie `{time, price}` — zgodnym z TGE/Nordpool i kompatybilnym z [EV Smart Charging](https://github.com/jonasbkarlsson/ev_smart_charging) czy [cheapest-energy-hours](https://github.com/TheFes/cheapest-energy-hours/).
+
+Każdy wpis ma też składniki ceny z API dla danej godziny (zł/kWh, zaokrąglone do 7 miejsc po przecinku), a wpisy `json_buy` także znaczniki Pstryka:
+
+| Pole | `json_buy` | `json_sell` |
+|---|---|---|
+| `tge_price` — cena energii | ✓ | ✓ |
+| `dist_price` — opłata dystrybucyjna zmienna | ✓ | |
+| `service_price` — opłata serwisowa | ✓ | |
+| `vat_component` — VAT | ✓ | |
+| `excise_component` — akcyza | ✓ | |
+| `is_cheap`, `is_expensive` — tania / droga godzina wg Pstryka | ✓ | |
+
+- Kupno: `tge_price + dist_price + service_price + vat_component + excise_component` to pełna cena brutto; `price` to ta sama cena zaokrąglona do 2 miejsc po przecinku.
+- Sprzedaż: przy dodatnich cenach `price` to `tge_price × 1,23` (sprawdzone na danych z API). Godziny z ceną ujemną nie były jeszcze sprawdzane, więc tam tego wzoru nie należy zakładać.
+- `is_cheap` / `is_expensive` są przepisane z API bez zmian. Pstryk podaje je dla ceny zakupu, dlatego nie ma ich we wpisach `json_sell`. Sposób ich wyznaczania nie jest znany.
+- Godziny jeszcze nieopublikowane: w `json_buy` ich nie ma, a w `json_sell` są ukryte, dopóki Pstryk nie poda cen. Składniki mają wartość `null`, gdy brakuje `tge_price` (API podaje wtedy np. `dist_price: 0`, co nie oznacza darmowej dystrybucji).
+- Jeśli po aktualizacji integracji pierwsze pobranie cen z API się nie uda, wpisy wczytane ze starej pamięci podręcznej mają składniki `null` aż do następnego udanego pobrania.
 
 Przykładowy wykres cen 48h ([apexcharts-card](https://github.com/RomRider/apexcharts-card)):
 
