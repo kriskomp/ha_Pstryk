@@ -150,7 +150,8 @@ async def async_setup_entry(
                 sell_coord = coordinator
 
         elif coordinator_type == "cost":
-            # No start-up fetch: cost runs at :05:30 on budget the prices leave free.
+            # Cost runs at :05:30 on budget the prices leave free; a start-up
+            # fetch follows below when the restored data is not current.
             coordinator.schedule_hourly_update()
 
     cost_coordinator.price_coordinators = [c for c in (buy_coord, sell_coord) if c]
@@ -190,6 +191,11 @@ async def async_setup_entry(
     _LOGGER.info("Registering %d current price sensors with data and %d additional sensors as unavailable",
                  len(entities), len(remaining_entities))
     async_add_entities(entities + remaining_entities)
+
+    # After the price start-up above: cost right away when nothing current was restored.
+    entry.async_create_background_task(
+        hass, cost_coordinator.async_startup_refresh(), f"{DOMAIN}_cost_startup"
+    )
 
 
 class PstrykPriceSensor(CoordinatorEntity, SensorEntity):

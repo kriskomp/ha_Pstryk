@@ -32,6 +32,11 @@ COST_RUN_MINUTE = 5
 COST_RUN_SECOND = 30
 COST_KEEP_FREE = 1
 
+# Start-up (first install, or restored cost data no longer current): fetch cost
+# right away instead of waiting up to an hour for :05:30, unless that run is
+# this close anyway.
+STARTUP_COST_GRACE = timedelta(minutes=10)
+
 
 def today_published(entries: list[dict], now: datetime) -> bool:
     """Whether cached price entries hold today's real prices, current hour included.
@@ -102,3 +107,8 @@ def next_midnight_refresh(now: datetime) -> datetime:
             hour=MIDNIGHT_REFRESH[0], minute=MIDNIGHT_REFRESH[1], second=0, microsecond=0
         )
     return run
+
+
+def startup_cost_fetch_due(now: datetime, missing_periods) -> bool:
+    """Whether a start-up with these cost periods missing should fetch now."""
+    return bool(missing_periods) and next_cost_run(now) - now > STARTUP_COST_GRACE

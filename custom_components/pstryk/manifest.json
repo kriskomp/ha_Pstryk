@@ -1,13 +1,13 @@
 {
   "domain": "pstryk",
   "name": "Pstryk Energy",
-  "version": "2.1.4",
-  "codeowners": ["@balgerion"],
+  "version": "2.2.0",
+  "codeowners": ["@kriskomp"],
   "after_dependencies": ["mqtt"],
   "iot_class": "cloud_polling",
   "config_flow": true,
-  "documentation": "https://github.com/balgerion/ha_Pstryk",
-  "issue_tracker": "https://github.com/balgerion/ha_Pstryk/issues",
+  "documentation": "https://github.com/kriskomp/ha_Pstryk",
+  "issue_tracker": "https://github.com/kriskomp/ha_Pstryk/issues",
   "platforms": ["sensor", "button"],
   "logo": "logo.png",
   "diagnostics": true

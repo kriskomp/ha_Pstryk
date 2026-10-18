@@ -1265,3 +1265,89 @@ def test_fork_midnight_refresh_failure_keeps_todays_cached_prices(mods, env):
     assert buy.last_update_success is True
     assert buy.data is not None
     assert any(p["start"].startswith("2026-10-03") for p in buy.data["prices"])
+
+
+# Fork: start-up cost fetch, so a first install does not wait up to an hour for :05:30.
+
+async def _first_start(mods, env, day, hour, minute):
+    """A first install: no price cache, no saved cost data. Prices start up, then cost."""
+    env.hass.session.cost_frames = True
+    _at(day, hour, minute)
+    client, coords = await env.build()
+    await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))  # price start-up
+    cost = _new_cost(mods, env, client, coords)
+    await cost.async_restore()
+    before = len(env.hass.session.sent)
+    result = await cost.async_startup_refresh()
+    return client, coords, cost, result, len(env.hass.session.sent) - before
+
+
+def test_fork_first_install_fetches_cost_at_once(mods, env):
+    async def scenario():
+        client, coords, cost, result, sent = await _first_start(mods, env, 2, 16, 11)
+        return cost, result, sent
+
+    cost, result, sent = _run(scenario())
+    assert (result, sent) == ("fetched", 2)  # daily + monthly window, right away
+    assert sorted(cost.data) == ["daily", "history", "monthly", "yearly"]
+    assert cost.last_update_success is True
+    assert env.hass.session.max_in_any_hour() <= 3
+
+
+def test_fork_first_install_then_back_in_the_hourly_rhythm(mods, env):
+    async def scenario():
+        client, coords, cost, _, _ = await _first_start(mods, env, 2, 16, 11)
+        runs = []
+        for hour in (17, 18, 19):
+            _at(2, hour, 5, 30)
+            before = len(env.hass.session.sent)
+            await cost._handle_hourly_update(None)
+            runs.append(len(env.hass.session.sent) - before)
+        return runs
+
+    # 17:05:30 finds the start-up's 3 requests still in the hour and skips;
+    # from 18:05:30 cost runs in the rhythm again.
+    assert _run(scenario()) == [0, 2, 2]
+    assert env.hass.session.max_in_any_hour() <= 3
+
+
+def test_fork_restart_with_current_cost_data_sends_nothing(mods, env):
+    async def scenario():
+        client, coords, cost, _, _ = await _first_start(mods, env, 2, 16, 11)
+        _at(2, 16, 40)  # restart in the same day
+        env.hass.data["pstryk"].clear()
+        client, coords = await env.build()
+        restarted = _new_cost(mods, env, client, coords)
+        await restarted.async_restore()
+        before = len(env.hass.session.sent)
+        result = await restarted.async_startup_refresh()
+        return result, len(env.hass.session.sent) - before, restarted
+
+    result, sent, restarted = _run(scenario())
+    assert (result, sent) == ("restored", 0)
+    assert restarted.last_update_success is True
+
+
+def test_fork_restart_on_a_new_day_fetches_the_missing_day(mods, env):
+    async def scenario():
+        client, coords, cost, _, _ = await _first_start(mods, env, 2, 16, 11)
+        _at(3, 8, 30)  # HA was off overnight: yesterday's daily data is not restored
+        env.hass.data["pstryk"].clear()
+        client, coords = await env.build()
+        await asyncio.gather(*(c.async_request_refresh() for c in coords.values()))
+        restarted = _new_cost(mods, env, client, coords)
+        await restarted.async_restore()
+        missing_daily = "daily" not in (restarted.data or {})
+        before = len(env.hass.session.sent)
+        result = await restarted.async_startup_refresh()
+        return missing_daily, result, len(env.hass.session.sent) - before
+
+    assert _run(scenario()) == (True, "fetched", 2)
+
+
+def test_fork_start_just_before_the_hourly_run_waits_for_it(mods, env):
+    async def scenario():
+        _, _, _, result, sent = await _first_start(mods, env, 2, 16, 58)  # 16:58, run at 17:05:30
+        return result, sent
+
+    assert _run(scenario()) == ("next_run_soon", 0)
