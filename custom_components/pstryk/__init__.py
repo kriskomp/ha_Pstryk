@@ -46,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("MQTT integration is not enabled. Cannot setup EVCC bridge.")
             try:
                 translations = await async_get_translations(
-                    hass, hass.config.language, "mqtt", [DOMAIN]
+                    hass, hass.config.language, "issues", [DOMAIN]
                 )
             except Exception as ex:
                 _LOGGER.warning("Failed to load translations for MQTT notification: %s", ex)
@@ -54,12 +54,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             persistent_notification.async_create(
                 hass,
                 translations.get(
-                    f"component.{DOMAIN}.mqtt.mqtt_not_configured_message",
+                    f"component.{DOMAIN}.issues.mqtt_not_configured.description",
                     "MQTT integration is not enabled. EVCC MQTT Bridge for Pstryk Energy "
                     "cannot function. Please configure MQTT integration in Home Assistant."
                 ),
                 title=translations.get(
-                    f"component.{DOMAIN}.mqtt.mqtt_not_configured_title",
+                    f"component.{DOMAIN}.issues.mqtt_not_configured.title",
                     "Pstryk Energy MQTT Error"
                 ),
                 notification_id=f"{DOMAIN}_mqtt_error_{entry.entry_id}"

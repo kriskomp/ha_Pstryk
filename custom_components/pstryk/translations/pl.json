@@ -122,8 +122,10 @@
       }
     }
   },
-  "mqtt": {
-    "mqtt_not_configured_title": "Pstryk Energy – błąd MQTT",
-    "mqtt_not_configured_message": "Integracja MQTT nie jest włączona. Mostek MQTT (EVCC) dla Pstryk Energy nie może działać. Skonfiguruj integrację MQTT w Home Assistant."
+  "issues": {
+    "mqtt_not_configured": {
+      "title": "Pstryk Energy – błąd MQTT",
+      "description": "Integracja MQTT nie jest włączona. Mostek MQTT (EVCC) dla Pstryk Energy nie może działać. Skonfiguruj integrację MQTT w Home Assistant."
+    }
   }
 }

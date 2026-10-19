@@ -142,8 +142,10 @@
       }
     }
   },
-  "mqtt": {
-    "mqtt_not_configured_title": "Pstryk Energy MQTT Error",
-    "mqtt_not_configured_message": "MQTT integration is not enabled. EVCC MQTT Bridge for Pstryk Energy cannot function. Please configure MQTT integration in Home Assistant."
+  "issues": {
+    "mqtt_not_configured": {
+      "title": "Pstryk Energy MQTT Error",
+      "description": "MQTT integration is not enabled. EVCC MQTT Bridge for Pstryk Energy cannot function. Please configure MQTT integration in Home Assistant."
+    }
   }
 }
