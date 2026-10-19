@@ -753,7 +753,9 @@ class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
     @property
     def name(self) -> str:
         period_name = self.period.title()
-        return f"Pstryk {self.price_type.title()} {period_name} Average"
+        # Fork: "period, direction" like the other sensors, so a device's
+        # entity list (sorted by name) groups each period together.
+        return f"Pstryk {period_name} {self.price_type.title()} Price Average"
         
     @property
     def unique_id(self) -> str:
@@ -1002,9 +1004,9 @@ class PstrykPricesFetchedSensor(CoordinatorEntity, SensorEntity):
 # Energy / money flow sensors built on data the cost coordinator already has.
 # key: (data field, name suffix, unit, device class, state class, icon)
 FLOW_METRICS = {
-    "energy_bought": ("fae_usage", "Energy Bought", "kWh", SensorDeviceClass.ENERGY,
+    "energy_bought": ("fae_usage", "Buy Volume", "kWh", SensorDeviceClass.ENERGY,
                       SensorStateClass.TOTAL_INCREASING, "mdi:transmission-tower-import"),
-    "energy_sold": ("rae_usage", "Energy Sold", "kWh", SensorDeviceClass.ENERGY,
+    "energy_sold": ("rae_usage", "Sell Volume", "kWh", SensorDeviceClass.ENERGY,
                     SensorStateClass.TOTAL_INCREASING, "mdi:transmission-tower-export"),
     "buy_cost": ("total_cost", "Buy Cost", "PLN", SensorDeviceClass.MONETARY,
                  SensorStateClass.TOTAL, "mdi:cash-minus"),
@@ -1168,12 +1170,12 @@ class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
         # kind: (name, unique_id, unit, device class, state class, icon)
         "sell_revenue": ("Pstryk Total Sell Revenue", f"{DOMAIN}_sell_revenue_total", "PLN",
                          SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-plus"),
-        "energy_sold": ("Pstryk Total Energy Sold", f"{DOMAIN}_energy_sold_total", "kWh",
+        "energy_sold": ("Pstryk Total Sell Volume", f"{DOMAIN}_energy_sold_total", "kWh",
                         SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING,
                         "mdi:transmission-tower-export"),
         "buy_cost": ("Pstryk Total Buy Cost", f"{DOMAIN}_buy_cost_total", "PLN",
                      SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-minus"),
-        "energy_bought": ("Pstryk Total Energy Bought", f"{DOMAIN}_energy_bought_total", "kWh",
+        "energy_bought": ("Pstryk Total Buy Volume", f"{DOMAIN}_energy_bought_total", "kWh",
                           SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING,
                           "mdi:transmission-tower-import"),
     }
@@ -1242,12 +1244,12 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.period = period
         self.entry_id = entry_id
-        # Named like the original averages: sensor.pstryk_sell_total_average.
+        # entity_id like the original averages: sensor.pstryk_sell_total_average.
         self.entity_id = f"sensor.{DOMAIN}_sell_{period}_average"
 
     @property
     def name(self) -> str:
-        return f"Pstryk Sell {self.period.title()} Average"
+        return f"Pstryk {self.period.title()} Sell Price Average"
 
     @property
     def unique_id(self) -> str:

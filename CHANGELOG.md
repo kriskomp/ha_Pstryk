@@ -6,6 +6,18 @@ Wersje do 2.1.4 włącznie: [oryginał balgerion/ha_Pstryk](https://github.com/b
 
 Kod polecający Pstryk: **1ML2X7**.
 
+## 2.2.6
+
+- **Nazwy encji w jednym szyku „okres → kierunek → wielkość”.** Home Assistant układa encje urządzenia
+  alfabetycznie po nazwie; dotąd średnie z oryginału („Pstryk Buy Daily Average”) stały osobno, a zakup
+  i sprzedaż jednego dnia były przemieszane. Teraz każdy okres (Daily, Monthly, Yearly, Total) to jeden
+  blok: zakup, bilans, sprzedaż. Zmienione nazwy (13 encji):
+  - `*_buy_*_average` / `*_sell_*_average`: „Pstryk Buy Daily Average” → „Pstryk Daily Buy Price Average”
+    (analogicznie Monthly, Yearly, Sell oraz „Pstryk Total Sell Price Average”),
+  - `*_energy_bought`: „Energy Bought” → „Buy Volume”, `*_energy_sold`: „Energy Sold” → „Sell Volume”.
+- **Identyfikatory encji i `unique_id` bez zmian** – automatyzacje, karty, recorder i statystyki działają
+  dalej. Nazwa zmieniona ręcznie w UI zostaje. Test pilnuje, żeby żaden identyfikator się nie zmienił.
+
 ## 2.2.5
 
 - **Spójne ikony w całej integracji** – zasada „rodzaj wielkości + kierunek”:
