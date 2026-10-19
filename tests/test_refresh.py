@@ -1461,14 +1461,14 @@ def test_fork_average_sensors_enabled_by_default_only_for_sell_monthly_yearly(mo
     }
 
 
-def test_fork_total_sell_average_is_named_like_the_original_averages(mods, env):
+def test_fork_total_sell_average_ids_like_the_original_averages(mods, env):
     async def scenario():
         client, coords = await env.build()
         cost = _new_cost(mods, env, client, coords)
         s = mods.sensor.PstrykAverageSellPriceSensor(cost, "total", "e")
         return s.entity_id, s.name, s.unique_id
 
-    assert _run(scenario()) == ("sensor.pstryk_sell_total_average", "Pstryk Sell Total Average",
+    assert _run(scenario()) == ("sensor.pstryk_sell_total_average", "Pstryk Total Sell Price Average",
                                 "pstryk_sell_total_average")
 
 
@@ -1666,23 +1666,31 @@ def test_fork_dst_end_price_tick_is_a_real_hour_later(mods, env):
     assert when.astimezone(timezone.utc) == datetime(2026, 10, 25, 1, 0, 5, tzinfo=timezone.utc)
 
 
-def test_fork_icons_follow_one_scheme(mods, env):
-    """Kind of value + direction: price tag for PLN/kWh, tower for kWh, cash for PLN."""
+def _all_sensors(mods, env):
+    """Every sensor the integration creates, built on the test environment."""
     S = mods.sensor
 
     async def scenario():
         client, coords = await env.build()
         cost = _new_cost(mods, env, client, coords)
         sensors = [S.PstrykPriceSensor(coords[t], t, 5, 5, "e") for t in ("buy", "sell")]
+        sensors += [S.PstrykJsonPriceSensor(coords[t], t, "e") for t in ("buy", "sell")]
         sensors += [S.PstrykAveragePriceSensor(cost, coords[t], p, "e")
                     for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")]
         sensors.append(S.PstrykAverageSellPriceSensor(cost, "total", "e"))
         sensors += [S.PstrykFlowSensor(cost, m, p, "e") for m, p in S.FLOW_SENSORS]
         sensors += [S.PstrykTotalSellSensor(cost, k, "e") for k in S.PstrykTotalSellSensor.KINDS]
         sensors += [S.PstrykFinancialBalanceSensor(cost, p, "e") for p in ("daily", "monthly", "yearly")]
-        return {s.entity_id: s._attr_icon for s in sensors}
+        sensors.append(S.PstrykPricesFetchedSensor(coords["buy"], "e"))
+        return sensors
 
-    icons = _run(scenario())
+    return _run(scenario())
+
+
+def test_fork_icons_follow_one_scheme(mods, env):
+    """Kind of value + direction: price tag for PLN/kWh, tower for kWh, cash for PLN."""
+    icons = {s.entity_id: s._attr_icon for s in _all_sensors(mods, env)
+             if s._attr_icon not in ("mdi:code-json", "mdi:cloud-download-outline")}
     expected = {}
     for t, icon in (("buy", "mdi:tag-arrow-down"), ("sell", "mdi:tag-arrow-up")):
         expected[f"sensor.pstryk_current_{t}_price"] = icon
@@ -1706,3 +1714,78 @@ def test_fork_no_sensor_overrides_icon_dynamically(mods):
     for obj in vars(S).values():
         if isinstance(obj, type) and obj.__module__ == S.__name__:
             assert "icon" not in vars(obj), obj.__name__
+
+
+
+# entity_id -> unique_id as released up to 2.2.5. Names may change, these must
+# not: automations, cards, the recorder and statistics are keyed on them.
+RELEASED_IDS = {
+    "sensor.pstryk_current_buy_price": "pstryk_buy_price",
+    "sensor.pstryk_current_sell_price": "pstryk_sell_price",
+    "sensor.pstryk_json_buy": "pstryk_buy_json",
+    "sensor.pstryk_json_sell": "pstryk_sell_json",
+    "sensor.pstryk_buy_daily_average": "pstryk_buy_daily_average",
+    "sensor.pstryk_buy_monthly_average": "pstryk_buy_monthly_average",
+    "sensor.pstryk_buy_yearly_average": "pstryk_buy_yearly_average",
+    "sensor.pstryk_sell_daily_average": "pstryk_sell_daily_average",
+    "sensor.pstryk_sell_monthly_average": "pstryk_sell_monthly_average",
+    "sensor.pstryk_sell_yearly_average": "pstryk_sell_yearly_average",
+    "sensor.pstryk_sell_total_average": "pstryk_sell_total_average",
+    "sensor.pstryk_daily_energy_bought": "pstryk_energy_bought_daily",
+    "sensor.pstryk_daily_energy_sold": "pstryk_energy_sold_daily",
+    "sensor.pstryk_daily_buy_cost": "pstryk_buy_cost_daily",
+    "sensor.pstryk_daily_sell_revenue": "pstryk_sell_revenue_daily",
+    "sensor.pstryk_monthly_sell_revenue": "pstryk_sell_revenue_monthly",
+    "sensor.pstryk_yearly_sell_revenue": "pstryk_sell_revenue_yearly",
+    "sensor.pstryk_monthly_energy_sold": "pstryk_energy_sold_monthly",
+    "sensor.pstryk_yearly_energy_sold": "pstryk_energy_sold_yearly",
+    "sensor.pstryk_total_sell_revenue": "pstryk_sell_revenue_total",
+    "sensor.pstryk_total_energy_sold": "pstryk_energy_sold_total",
+    "sensor.pstryk_total_buy_cost": "pstryk_buy_cost_total",
+    "sensor.pstryk_total_energy_bought": "pstryk_energy_bought_total",
+    "sensor.pstryk_daily_financial_balance": "pstryk_financial_balance_daily",
+    "sensor.pstryk_monthly_financial_balance": "pstryk_financial_balance_monthly",
+    "sensor.pstryk_yearly_financial_balance": "pstryk_financial_balance_yearly",
+    "sensor.pstryk_prices_fetched": "pstryk_prices_fetched",
+}
+
+
+def test_fork_entity_and_unique_ids_never_change(mods, env):
+    ids = {s.entity_id: s.unique_id for s in _all_sensors(mods, env)}
+    assert ids == RELEASED_IDS
+
+
+def test_fork_names_group_by_period_then_direction(mods, env):
+    """Home Assistant lists a device's entities alphabetically by name, so
+    the name order "period, direction, quantity" keeps each period together
+    and, inside it, buy before the balance before sell."""
+    names = sorted((s.name for s in _all_sensors(mods, env)), key=str.casefold)
+    assert names == [
+        "Pstryk Current Buy Price",
+        "Pstryk Current Sell Price",
+        "Pstryk Daily Buy Cost",
+        "Pstryk Daily Buy Price Average",
+        "Pstryk Daily Buy Volume",
+        "Pstryk Daily Financial Balance",
+        "Pstryk Daily Sell Price Average",
+        "Pstryk Daily Sell Revenue",
+        "Pstryk Daily Sell Volume",
+        "Pstryk Json Buy",
+        "Pstryk Json Sell",
+        "Pstryk Monthly Buy Price Average",
+        "Pstryk Monthly Financial Balance",
+        "Pstryk Monthly Sell Price Average",
+        "Pstryk Monthly Sell Revenue",
+        "Pstryk Monthly Sell Volume",
+        "Pstryk Prices Fetched",
+        "Pstryk Total Buy Cost",
+        "Pstryk Total Buy Volume",
+        "Pstryk Total Sell Price Average",
+        "Pstryk Total Sell Revenue",
+        "Pstryk Total Sell Volume",
+        "Pstryk Yearly Buy Price Average",
+        "Pstryk Yearly Financial Balance",
+        "Pstryk Yearly Sell Price Average",
+        "Pstryk Yearly Sell Revenue",
+        "Pstryk Yearly Sell Volume",
+    ]

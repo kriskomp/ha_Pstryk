@@ -195,12 +195,12 @@ async def main():
         "sensor.pstryk_sell_total_average"]))
     ids = [s.unique_id for s in every]
     check("15 distinct unique ids", len(set(ids)) == 15, str(ids))
-    check("total average named like the original averages",
-          (avg["total"].name, avg["total"].unique_id) == ("Pstryk Sell Total Average", "pstryk_sell_total_average"))
+    check("total average: ids like the original averages",
+          (avg["total"].name, avg["total"].unique_id) == ("Pstryk Total Sell Price Average", "pstryk_sell_total_average"))
     check("total bought/cost: names, units, never reset",
           (tot_bought.name, tot_bought._attr_native_unit_of_measurement, tot_bought._attr_state_class,
            tot_cost.name, tot_cost._attr_native_unit_of_measurement, tot_cost._attr_state_class)
-          == ("Pstryk Total Energy Bought", "kWh", S.SensorStateClass.TOTAL_INCREASING,
+          == ("Pstryk Total Buy Volume", "kWh", S.SensorStateClass.TOTAL_INCREASING,
               "Pstryk Total Buy Cost", "PLN", S.SensorStateClass.TOTAL)
           and not hasattr(tot_cost, "last_reset"))
     # 10 month frames since 01.10.2024: 3 in 2024, 3 in 2025, 4 in 2026 (local months)

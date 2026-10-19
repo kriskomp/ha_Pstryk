@@ -7,7 +7,7 @@ Użyj mojego kodu 1ML2X7 w koszyku w aplikacji. Bonus trafi do Twojego Portfela 
 !!! Dedykowana Karta do integracji (autora oryginału):
 https://github.com/balgerion/ha_Pstryk_card
 
-[![Wersja](https://img.shields.io/badge/wersja-2.2.5-blue)](https://github.com/kriskomp/ha_Pstryk/)
+[![Wersja](https://img.shields.io/badge/wersja-2.2.6-blue)](https://github.com/kriskomp/ha_Pstryk/)
 
 Integracja dla Home Assistant umożliwiająca śledzenie aktualnych cen energii elektrycznej oraz prognoz z platformy Pstryk.
 
@@ -32,6 +32,7 @@ To jest fork integracji [balgerion/ha_Pstryk](https://github.com/balgerion/ha_Ps
 | Odświeżanie ręczne | brak | `button.pstryk_refresh_prices` (pilnuje limitu) i `sensor.pstryk_prices_fetched` |
 | Średnie ceny kupna/sprzedaży (6 encji) | wszystkie włączone | bez zmian w działaniu; domyślnie włączone tylko średnie sprzedaży miesięczna/roczna – patrz [Encje domyślnie wyłączone](#encje-domyślnie-wyłączone) |
 | Średnia cena sprzedaży od początku | brak | `sensor.pstryk_sell_total_average` (nazwa w stylu oryginału) |
+| Nazwy w HA | dwa szyki: „Pstryk Buy Daily Average” obok „Pstryk Daily Buy Cost” – lista encji urządzenia (alfabetyczna) przeplata okresy | jeden szyk „okres → kierunek → wielkość”; identyfikatory encji bez zmian – patrz [Nazwy encji](#nazwy-encji) |
 | Ikony | tylko JSON i bilans (bilans według znaku, odwrotnie: koszt z `cash-plus`); reszta domyślna HA | jedna zasada „rodzaj + kierunek” – patrz [Ikony](#ikony) |
 
 **Przejście z oryginału:** patrz [Instalacja → Przejście z oryginału (balgerion)](#przejście-z-oryginału-balgerion).
@@ -42,10 +43,10 @@ Wszystkie encje oryginału zostają. Cztery średnie są w forku **domyślnie wy
 
 | Identyfikator encji | Nazwa w HA | Co pokazuje |
 |---|---|---|
-| `sensor.pstryk_buy_daily_average` | Pstryk Buy Daily Average | koszt zakupu ÷ kWh kupione, bieżący dzień (PLN/kWh) |
-| `sensor.pstryk_buy_monthly_average` | Pstryk Buy Monthly Average | jw., bieżący miesiąc |
-| `sensor.pstryk_buy_yearly_average` | Pstryk Buy Yearly Average | jw., bieżący rok |
-| `sensor.pstryk_sell_daily_average` | Pstryk Sell Daily Average | przychód ze sprzedaży ÷ kWh sprzedane, bieżący dzień (PLN/kWh) |
+| `sensor.pstryk_buy_daily_average` | Pstryk Daily Buy Price Average | koszt zakupu ÷ kWh kupione, bieżący dzień (PLN/kWh) |
+| `sensor.pstryk_buy_monthly_average` | Pstryk Monthly Buy Price Average | jw., bieżący miesiąc |
+| `sensor.pstryk_buy_yearly_average` | Pstryk Yearly Buy Price Average | jw., bieżący rok |
+| `sensor.pstryk_sell_daily_average` | Pstryk Daily Sell Price Average | przychód ze sprzedaży ÷ kWh sprzedane, bieżący dzień (PLN/kWh) |
 
 Włączone zostają `sensor.pstryk_sell_monthly_average` i `sensor.pstryk_sell_yearly_average` – to rzeczywista średnia cena sprzedaży (przychód ÷ kWh) za miesiąc i rok; od początku sprzedaży: `sensor.pstryk_sell_total_average`.
 
@@ -54,6 +55,21 @@ Włączone zostają `sensor.pstryk_sell_monthly_average` i `sensor.pstryk_sell_y
 **Włączenie:** *Ustawienia → Urządzenia i usługi → Encje* → wyszukaj encję (w filtrach włącz pokazywanie wyłączonych) → otwórz → ⚙ Ustawienia → **Włączone** → Aktualizuj.
 
 **Przy przejściu z oryginału** Home Assistant zostawia te encje włączone (ustawienie domyślne dotyczy tylko nowo dodawanych encji). Żeby je wyłączyć: *Ustawienia → Urządzenia i usługi → Encje* → zaznacz encje z tabeli → ⋮ → **Wyłącz wybrane**.
+
+### Nazwy encji
+
+Home Assistant układa encje urządzenia alfabetycznie po nazwie. W forku każda nazwa ma szyk **okres → kierunek → wielkość**, więc encje jednego okresu stoją razem: najpierw zakup, potem bilans, potem sprzedaż.
+
+| Okres | Zakup | Bilans | Sprzedaż |
+|---|---|---|---|
+| Daily | Buy Cost, Buy Price Average, Buy Volume | Financial Balance | Sell Price Average, Sell Revenue, Sell Volume |
+| Monthly | Buy Price Average | Financial Balance | Sell Price Average, Sell Revenue, Sell Volume |
+| Yearly | Buy Price Average | Financial Balance | Sell Price Average, Sell Revenue, Sell Volume |
+| Total | Buy Cost, Buy Volume | – | Sell Price Average, Sell Revenue, Sell Volume |
+
+*Volume* = ilość energii (kWh), *Price Average* = średnia cena (PLN/kWh), *Cost* / *Revenue* = PLN.
+
+**Identyfikatory encji (`entity_id`) i `unique_id` nie zmieniają się** – automatyzacje, karty, recorder i statystyki działają dalej, a fork pozostaje zgodny z oryginałem. Dlatego nazwa i identyfikator nie zawsze mają ten sam szyk (np. „Pstryk Daily Sell Volume” to `sensor.pstryk_daily_energy_sold`). Nazwa zmieniona ręcznie w UI ma pierwszeństwo. Kto chce identyfikatory zgodne z nazwami u siebie, może je zmienić w UI (encja → ⚙ → Identyfikator encji) – historia i statystyki przechodzą automatycznie, trzeba tylko poprawić własne automatyzacje i karty.
 
 ### Ikony
 
@@ -158,7 +174,7 @@ Po pierwszym starcie ceny są pobierane od nowa (pamięć cen oryginału jest ka
 
 Wszystkie wartości pochodzą z danych rozliczeniowych Pstryk (`unified-metrics`), bez dodatkowych zapytań do API.
 
-| Okres | Energia kupiona (kWh) | Koszt zakupu (PLN) | Energia sprzedana (kWh) | Przychód ze sprzedaży (PLN) | Średnia cena sprzedaży (PLN/kWh) |
+| Okres | Energia kupiona – Buy Volume (kWh) | Koszt zakupu – Buy Cost (PLN) | Energia sprzedana – Sell Volume (kWh) | Przychód – Sell Revenue (PLN) | Średnia cena sprzedaży – Sell Price Average (PLN/kWh) |
 |---|---|---|---|---|---|
 | Dzień | `sensor.pstryk_daily_energy_bought` | `sensor.pstryk_daily_buy_cost` | `sensor.pstryk_daily_energy_sold` | `sensor.pstryk_daily_sell_revenue` | `sensor.pstryk_sell_daily_average` (oryginał, domyślnie wyłączona) |
 | Miesiąc | – | – | `sensor.pstryk_monthly_energy_sold` | `sensor.pstryk_monthly_sell_revenue` | `sensor.pstryk_sell_monthly_average` (oryginał) |
