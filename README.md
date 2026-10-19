@@ -7,11 +7,11 @@ Użyj mojego kodu 1ML2X7 w koszyku w aplikacji. Bonus trafi do Twojego Portfela 
 !!! Dedykowana Karta do integracji (autora oryginału):
 https://github.com/balgerion/ha_Pstryk_card
 
-[![Wersja](https://img.shields.io/badge/wersja-2.2.4-blue)](https://github.com/kriskomp/ha_Pstryk/)
+[![Wersja](https://img.shields.io/badge/wersja-2.2.5-blue)](https://github.com/kriskomp/ha_Pstryk/)
 
 Integracja dla Home Assistant umożliwiająca śledzenie aktualnych cen energii elektrycznej oraz prognoz z platformy Pstryk.
 
-Lista zmian w kolejnych wersjach: [Releases](https://github.com/kriskomp/ha_Pstryk/releases).
+Lista zmian w kolejnych wersjach: [CHANGELOG.md](CHANGELOG.md) i [Releases](https://github.com/kriskomp/ha_Pstryk/releases) (wydanie powstaje automatycznie po zmianie wersji na `main`).
 
 ## Czym ten fork różni się od oryginału
 
@@ -32,6 +32,7 @@ To jest fork integracji [balgerion/ha_Pstryk](https://github.com/balgerion/ha_Ps
 | Odświeżanie ręczne | brak | `button.pstryk_refresh_prices` (pilnuje limitu) i `sensor.pstryk_prices_fetched` |
 | Średnie ceny kupna/sprzedaży (6 encji) | wszystkie włączone | bez zmian w działaniu; domyślnie włączone tylko średnie sprzedaży miesięczna/roczna – patrz [Encje domyślnie wyłączone](#encje-domyślnie-wyłączone) |
 | Średnia cena sprzedaży od początku | brak | `sensor.pstryk_sell_total_average` (nazwa w stylu oryginału) |
+| Ikony | tylko JSON i bilans (bilans według znaku, odwrotnie: koszt z `cash-plus`); reszta domyślna HA | jedna zasada „rodzaj + kierunek” – patrz [Ikony](#ikony) |
 
 **Przejście z oryginału:** patrz [Instalacja → Przejście z oryginału (balgerion)](#przejście-z-oryginału-balgerion).
 
@@ -53,6 +54,17 @@ Włączone zostają `sensor.pstryk_sell_monthly_average` i `sensor.pstryk_sell_y
 **Włączenie:** *Ustawienia → Urządzenia i usługi → Encje* → wyszukaj encję (w filtrach włącz pokazywanie wyłączonych) → otwórz → ⚙ Ustawienia → **Włączone** → Aktualizuj.
 
 **Przy przejściu z oryginału** Home Assistant zostawia te encje włączone (ustawienie domyślne dotyczy tylko nowo dodawanych encji). Żeby je wyłączyć: *Ustawienia → Urządzenia i usługi → Encje* → zaznacz encje z tabeli → ⋮ → **Wyłącz wybrane**.
+
+### Ikony
+
+| Rodzaj | Zakup | Sprzedaż |
+|---|---|---|
+| Cena PLN/kWh (bieżąca i wszystkie średnie) | `mdi:tag-arrow-down` | `mdi:tag-arrow-up` |
+| Energia kWh | `mdi:transmission-tower-import` | `mdi:transmission-tower-export` |
+| Pieniądze PLN | `mdi:cash-minus` (koszt) | `mdi:cash-plus` (przychód) |
+| Bilans (`*_financial_balance`) | `mdi:scale-balance` | |
+
+Dodatni bilans Pstryk oznacza koszt, ujemny – zysk. Ikona ustawiona ręcznie w UI ma pierwszeństwo.
 
 ## Status API
 

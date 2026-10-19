@@ -1664,3 +1664,45 @@ def test_fork_dst_end_price_tick_is_a_real_hour_later(mods, env):
     when = _run(scenario())
     # The next tick is 01:00:05 UTC = 02:00:05 CET (the repeated hour), not 03:00 CET.
     assert when.astimezone(timezone.utc) == datetime(2026, 10, 25, 1, 0, 5, tzinfo=timezone.utc)
+
+
+def test_fork_icons_follow_one_scheme(mods, env):
+    """Kind of value + direction: price tag for PLN/kWh, tower for kWh, cash for PLN."""
+    S = mods.sensor
+
+    async def scenario():
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        sensors = [S.PstrykPriceSensor(coords[t], t, 5, 5, "e") for t in ("buy", "sell")]
+        sensors += [S.PstrykAveragePriceSensor(cost, coords[t], p, "e")
+                    for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")]
+        sensors.append(S.PstrykAverageSellPriceSensor(cost, "total", "e"))
+        sensors += [S.PstrykFlowSensor(cost, m, p, "e") for m, p in S.FLOW_SENSORS]
+        sensors += [S.PstrykTotalSellSensor(cost, k, "e") for k in S.PstrykTotalSellSensor.KINDS]
+        sensors += [S.PstrykFinancialBalanceSensor(cost, p, "e") for p in ("daily", "monthly", "yearly")]
+        return {s.entity_id: s._attr_icon for s in sensors}
+
+    icons = _run(scenario())
+    expected = {}
+    for t, icon in (("buy", "mdi:tag-arrow-down"), ("sell", "mdi:tag-arrow-up")):
+        expected[f"sensor.pstryk_current_{t}_price"] = icon
+        for p in ("daily", "monthly", "yearly"):
+            expected[f"sensor.pstryk_{t}_{p}_average"] = icon
+    expected["sensor.pstryk_sell_total_average"] = "mdi:tag-arrow-up"
+    for p in ("daily", "total"):
+        expected[f"sensor.pstryk_{p}_energy_bought"] = "mdi:transmission-tower-import"
+        expected[f"sensor.pstryk_{p}_buy_cost"] = "mdi:cash-minus"
+    for p in ("daily", "monthly", "yearly", "total"):
+        expected[f"sensor.pstryk_{p}_energy_sold"] = "mdi:transmission-tower-export"
+        expected[f"sensor.pstryk_{p}_sell_revenue"] = "mdi:cash-plus"
+    for p in ("daily", "monthly", "yearly"):
+        expected[f"sensor.pstryk_{p}_financial_balance"] = "mdi:scale-balance"
+    assert icons == expected
+
+
+def test_fork_no_sensor_overrides_icon_dynamically(mods):
+    """A dynamic `icon` property would silently replace the scheme above."""
+    S = mods.sensor
+    for obj in vars(S).values():
+        if isinstance(obj, type) and obj.__module__ == S.__name__:
+            assert "icon" not in vars(obj), obj.__name__

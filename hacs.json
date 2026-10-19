@@ -1,9 +1,6 @@
 {
   "name": "ha_Pstryk",
-  "domains": ["sensor", "button"],
   "content_in_root": false,
   "country": "PL",
-  "render_readme": true,
-  "documentation": "https://github.com/kriskomp/ha_Pstryk/blob/main/README.md",
-  "issue_tracker": "https://github.com/kriskomp/ha_Pstryk/issues"
+  "render_readme": true
 }

@@ -204,6 +204,13 @@ async def async_setup_entry(
     )
 
 
+# Fork: one icon scheme for the whole integration, "kind of value + direction".
+# Prices (PLN/kWh, current and averages) use a price tag, energy (kWh) a
+# transmission tower and money (PLN) cash; buy points down/in, sell up/out.
+PRICE_ICONS = {"buy": "mdi:tag-arrow-down", "sell": "mdi:tag-arrow-up"}
+BALANCE_ICON = "mdi:scale-balance"
+
+
 class PstrykPriceSensor(CoordinatorEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _unrecorded_attributes = frozenset({"All prices", "Best prices", "Worst prices"})
@@ -215,6 +222,7 @@ class PstrykPriceSensor(CoordinatorEntity, SensorEntity):
         self.worst_count = worst_count
         self.entry_id = entry_id
         self.entity_id = f"sensor.{DOMAIN}_current_{price_type}_price"
+        self._attr_icon = PRICE_ICONS[price_type]
         self._cached_sorted_prices = None
         self._last_data_hash = None
         
@@ -704,6 +712,7 @@ class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
         self.period = period
         self.entry_id = entry_id
         self.entity_id = f"sensor.{DOMAIN}_{self.price_type}_{period}_average"
+        self._attr_icon = PRICE_ICONS[self.price_type]
         # Fork: only the sell monthly/yearly averages (the real average sell
         # price) are enabled by default; the others can be enabled by the user.
         self._attr_entity_registry_enabled_default = (
@@ -845,6 +854,10 @@ class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
 class PstrykFinancialBalanceSensor(CoordinatorEntity, SensorEntity):
     _attr_state_class = SensorStateClass.TOTAL
     _attr_device_class = SensorDeviceClass.MONETARY
+    # Fork: a static icon. The original picked cash-plus for a positive
+    # balance, but a positive Pstryk balance is a net cost (and negative a
+    # profit), so the sign-based icon pointed the wrong way.
+    _attr_icon = BALANCE_ICON
     
     def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, 
                  period: str, entry_id: str):
@@ -890,17 +903,6 @@ class PstrykFinancialBalanceSensor(CoordinatorEntity, SensorEntity):
     def native_unit_of_measurement(self) -> str:
         return "PLN"
         
-    @property
-    def icon(self) -> str:
-        if self.native_value is None:
-            return "mdi:currency-usd-off"
-        elif self.native_value < 0:
-            return "mdi:cash-minus"
-        elif self.native_value > 0:
-            return "mdi:cash-plus"
-        else:
-            return "mdi:cash"
-            
     @property
     def extra_state_attributes(self) -> dict:
         if not self.coordinator.data or not self.coordinator.data.get(self.period):
@@ -1165,7 +1167,7 @@ class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
     KINDS = {
         # kind: (name, unique_id, unit, device class, state class, icon)
         "sell_revenue": ("Pstryk Total Sell Revenue", f"{DOMAIN}_sell_revenue_total", "PLN",
-                         SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-multiple"),
+                         SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "mdi:cash-plus"),
         "energy_sold": ("Pstryk Total Energy Sold", f"{DOMAIN}_energy_sold_total", "kWh",
                         SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING,
                         "mdi:transmission-tower-export"),
@@ -1234,7 +1236,7 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "PLN/kWh"
     _attr_suggested_display_precision = 4
-    _attr_icon = "mdi:cash-check"
+    _attr_icon = PRICE_ICONS["sell"]
 
     def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, period: str, entry_id: str):
         super().__init__(coordinator)
