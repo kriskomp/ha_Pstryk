@@ -1389,10 +1389,12 @@ class PstrykTotalBalanceSensor(CoordinatorEntity, SensorEntity):
 
 
 class PstrykEnergyBalanceSensor(CoordinatorEntity, SensorEntity):
-    """Energy balance of a period in kWh = energy bought - energy sold.
+    """Energy balance of a period in kWh: Pstryk's own energy_balance, as the API
+    reports it (the sum of the period's frames); negative when more was sold
+    than bought. The value is taken as given, not recomputed.
 
-    The same as Pstryk's own energy_balance (checked on real API data); negative
-    when more was sold than bought.
+    Period data saved by 2.2.x lacks it until the next hourly cost run, so the
+    sensor is unknown until then rather than showing a computed stand-in.
     """
 
     _attr_state_class = SensorStateClass.TOTAL
@@ -1426,9 +1428,9 @@ class PstrykEnergyBalanceSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         period_data = (self.coordinator.data or {}).get(self.period)
-        if not period_data or "fae_usage" not in period_data or "rae_usage" not in period_data:
+        if not period_data or period_data.get("energy_balance") is None:
             return None
-        return round((period_data["fae_usage"] or 0) - (period_data["rae_usage"] or 0), 3)
+        return round(period_data["energy_balance"], 3)
 
     @property
     def extra_state_attributes(self) -> dict:

@@ -128,7 +128,8 @@ BOUGHT_KWH, BUY_COST = 100.0, 80.0  # per month frame, for the buy totals
 def month_frame(start, sold):
     return {"start": start, "end": None, "is_live": False,
             "metrics": {"meter_values": {"energy_active_export_register": sold * KWH_PER_PLN,
-                                         "energy_active_import_register": BOUGHT_KWH},
+                                         "energy_active_import_register": BOUGHT_KWH,
+                                         "energy_balance": BOUGHT_KWH - sold * KWH_PER_PLN},
                         "cost": {"energy_sold_value": sold, "energy_import_cost": BUY_COST}}}
 
 
@@ -142,7 +143,8 @@ class FakeAPI:
         if "resolution=day" in url:
             return {"frames": [{"start": "2026-10-15T22:00:00Z", "is_live": True,
                                 "metrics": {"meter_values": {"energy_active_import_register": 14.86,
-                                                             "energy_active_export_register": 3.2},
+                                                             "energy_active_export_register": 3.2,
+                                                             "energy_balance": 11.66},
                                             "cost": {"energy_sold_value": 2.71}}}]}
         return {"frames": [month_frame(s, v) for s, v in self.months]}
 
@@ -255,12 +257,13 @@ async def main():
           (tot_balance.name, tot_balance.unique_id, tot_balance.native_value)
           == ("Pstryk Total Financial Balance", "pstryk_financial_balance_total", round(800.0 - 438.24, 2)),
           str(tot_balance.native_value))
-    check("energy balance = bought - sold, per period",
+    check("energy balance = the API's energy_balance of the period (day, month, sum of the year)",
           (energy_balance["daily"].native_value, energy_balance["monthly"].native_value,
            energy_balance["yearly"].native_value)
-          == (round(14.86 - 3.2, 3), round(m["fae_usage"] - m["rae_usage"], 3),
-              round(y["fae_usage"] - y["rae_usage"], 3)),
+          == (11.66, round(m["energy_balance"], 3), round(y["energy_balance"], 3)),
           str({p: e.native_value for p, e in energy_balance.items()}))
+    check("energy balance of the year = sum of the 4 monthly frames of 2026 (400 - 292.16 kWh)",
+          abs(y["energy_balance"] - (4 * BOUGHT_KWH - 438.24 * KWH_PER_PLN)) < 0.01, str(y["energy_balance"]))
     check("energy balance: names, ids, unit, negative allowed (total, not total_increasing)",
           (energy_balance["daily"].name, energy_balance["daily"].unique_id,
            energy_balance["daily"]._attr_native_unit_of_measurement,
@@ -268,11 +271,22 @@ async def main():
            energy_balance["daily"].last_reset == datetime(2026, 10, 16, tzinfo=TZ))
           == ("Pstryk Daily Energy Balance", "pstryk_energy_balance_daily", "kWh",
               S.SensorStateClass.TOTAL, True))
-    m_rae = m["rae_usage"]
-    m["rae_usage"] = m["fae_usage"] + 5
+    # taken as given: a balance that differs from bought - sold is shown as the API reports it
+    odd = c._process_monthly_data_simple({"frames": [{
+        "start": "2026-09-30T22:00:00Z", "metrics": {"meter_values": {
+            "energy_active_import_register": 10.0, "energy_active_export_register": 4.0,
+            "energy_balance": 7.5}, "cost": {}}}]})
+    saved = c.data["monthly"]
+    c.data["monthly"] = odd
+    check("energy balance is the API value, not recomputed (7.5, not 10 - 4)",
+          energy_balance["monthly"].native_value == 7.5, str(energy_balance["monthly"].native_value))
+    odd["energy_balance"] = -5.0
     check("energy balance is negative when more was sold than bought",
           energy_balance["monthly"].native_value == -5.0, str(energy_balance["monthly"].native_value))
-    m["rae_usage"] = m_rae
+    del odd["energy_balance"]  # period data saved by 2.2.x
+    check("period data saved before 2.3.0 (no energy_balance): unknown, not a computed stand-in",
+          energy_balance["monthly"].native_value is None)
+    c.data["monthly"] = saved
     flow_missing = S.PstrykEnergyBalanceSensor(PstrykCostDataUpdateCoordinator(None, FakeAPI([]), 1, 1, entry_id="e"),
                                                "daily", "e")
     check("energy balance without data: unknown, not 0", flow_missing.native_value is None)

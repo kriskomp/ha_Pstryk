@@ -17,9 +17,11 @@ Kod polecający Pstryk: **1ML2X7**.
     `sensor.pstryk_sell_total_average`),
   - `sensor.pstryk_total_financial_balance` – bilans od 01.10.2024 (koszt zakupu minus przychód ze sprzedaży,
     dodatni = koszt netto, jak w bilansie dziennym, miesięcznym i rocznym),
-  - `sensor.pstryk_daily_energy_balance`, `_monthly_`, `_yearly_` – bilans energii w kWh (kupione minus
-    sprzedane; ujemny, gdy sprzedano więcej). To to samo, co pole `energy_balance` w API Pstryka (sprawdzone
-    na danych rozliczeniowych z 29 i 30.10.2026).
+  - `sensor.pstryk_daily_energy_balance`, `_monthly_`, `_yearly_` – bilans energii w kWh dokładnie tak, jak
+    podaje go API Pstryka (pole `energy_balance`; za rok suma miesięcy), bez własnego przeliczania. Ujemny,
+    gdy sprzedano więcej niż kupiono. Pole przychodzi w tych samych odpowiedziach co reszta, więc bez nowych
+    zapytań. Zaraz po aktualizacji z 2.2.x (dane zapisane przed 2.3.0 go nie mają) te trzy encje mają
+    wartość nieznaną do najbliższego pobrania kosztów o pełnej godzinie :05:30.
   Nazwy w szyku „okres → kierunek → wielkość”, ikony według zasady z 2.2.5 (`mdi:transmission-tower` dla
   bilansu energii).
 - **Wszystkie sześć średnich cen znów włączone domyślnie**, tak jak w oryginale. Wersja 2.2.1 wyłączyła cztery

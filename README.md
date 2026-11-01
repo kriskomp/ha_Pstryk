@@ -57,7 +57,7 @@ Home Assistant układa encje urządzenia alfabetycznie po nazwie. W forku każda
 | Yearly | Buy Cost, Buy Price Average, Buy Volume | Energy Balance, Financial Balance | Sell Price Average, Sell Revenue, Sell Volume |
 | Total | Buy Cost, Buy Price Average, Buy Volume | Financial Balance | Sell Price Average, Sell Revenue, Sell Volume |
 
-*Volume* = ilość energii (kWh), *Energy Balance* = kupione minus sprzedane (kWh), *Price Average* = średnia cena (PLN/kWh), *Cost* / *Revenue* / *Financial Balance* = PLN.
+*Volume* = ilość energii (kWh), *Energy Balance* = bilans energii z API (kupione minus sprzedane, kWh), *Price Average* = średnia cena (PLN/kWh), *Cost* / *Revenue* / *Financial Balance* = PLN.
 
 **Identyfikatory encji (`entity_id`) i `unique_id` nie zmieniają się** – automatyzacje, karty, recorder i statystyki działają dalej, a fork pozostaje zgodny z oryginałem. Dlatego nazwa i identyfikator nie zawsze mają ten sam szyk (np. „Pstryk Daily Sell Volume” to `sensor.pstryk_daily_energy_sold`). Nazwa zmieniona ręcznie w UI ma pierwszeństwo. Kto chce identyfikatory zgodne z nazwami u siebie, może je zmienić w UI (encja → ⚙ → Identyfikator encji) – historia i statystyki przechodzą automatycznie, trzeba tylko poprawić własne automatyzacje i karty.
 
@@ -208,7 +208,7 @@ Wszystkie wartości pochodzą z danych rozliczeniowych Pstryk (`unified-metrics`
 - **Całość** liczona jest od 01.10.2024 (start Pstryk); miesiące sprzed umowy API zwraca jako zera. Atrybuty sensorów `total` zawierają rozbicie per rok.
 - **Średnia cena sprzedaży** = przychód ÷ kWh sprzedane w tym samym okresie (średnia ważona, rzeczywista). Gdy nic nie sprzedano, sensor nie ma wartości. Średnia cena kupna = koszt ÷ kWh kupione, tak samo.
 - **Bilans** (`*_financial_balance`, PLN) = koszt zakupu minus przychód ze sprzedaży; dodatni to koszt netto, ujemny to zysk. `sensor.pstryk_total_financial_balance` liczy to od 01.10.2024 z sum rocznych.
-- **Bilans energii** (`*_energy_balance`, kWh) = kupione minus sprzedane za dzień, miesiąc i rok. To dokładnie pole `energy_balance` z API Pstryka (sprawdzone na danych rozliczeniowych); ujemny, gdy sprzedano więcej niż kupiono.
+- **Bilans energii** (`*_energy_balance`, kWh) za dzień, miesiąc i rok (kupione minus sprzedane). To wartość pola `energy_balance` z API Pstryka, bez własnego przeliczania (za rok suma miesięcy); ujemny, gdy sprzedano więcej niż kupiono. Zaraz po aktualizacji z 2.2.x jest nieznany do najbliższego pobrania kosztów (:05:30).
 - **Do statystyk i wykresów długoterminowych używaj sensorów `total`.** Nie zerują się, więc nic nie ginie: dane godziny pojawiają się w API do 3 minut po jej zamknięciu i trafiają do statystyk z przesunięciem o jedną godzinę (ostatnia godzina doby wpada do statystyk następnego dnia). Sensory dzienne zerują się o północy i są podglądem bieżącej doby – ostatnia godzina doby nie zdąży do nich trafić.
 
 ### Limit API i harmonogram pobierania

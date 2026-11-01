@@ -247,7 +247,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_sold": 0,
             "total_cost": 0,
             "fae_usage": 0,
-            "rae_usage": 0
+            "rae_usage": 0,
+            "energy_balance": 0
         }
 
         frames = self._normalized_frames(response)
@@ -270,6 +271,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             result["total_cost"] = abs(frame.get("fae_cost", 0))
             result["fae_usage"] = frame.get("fae_usage", 0)
             result["rae_usage"] = frame.get("rae", 0)
+            result["energy_balance"] = frame.get("energy_balance", 0)
             _LOGGER.info(f"Monthly data from frame {frame.get('start')}: balance={result['total_balance']}, "
                         f"sold={result['total_sold']}, cost={result['total_cost']}, "
                         f"fae={result['fae_usage']}, rae={result['rae_usage']}")
@@ -285,7 +287,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_sold": 0,
             "total_cost": 0,
             "fae_usage": 0,
-            "rae_usage": 0
+            "rae_usage": 0,
+            "energy_balance": 0
         }
 
         live_date = None
@@ -304,6 +307,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 if frame.get("is_live", False):
                     result["fae_usage"] = frame.get("fae_usage", 0)
                     result["rae_usage"] = frame.get("rae", 0)
+                    result["energy_balance"] = frame.get("energy_balance", 0)
                     _LOGGER.info(f"*** FOUND LIVE FRAME: fae_usage={result['fae_usage']}, rae={result['rae_usage']} ***")
 
                     live_start = frame.get("start")
@@ -351,6 +355,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         total_cost = 0
         fae_usage = 0
         rae_usage = 0
+        energy_balance = 0
 
         frames = self._normalized_frames(response)
 
@@ -366,6 +371,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             for frame in frames:
                 fae_usage += frame.get("fae_usage", 0)
                 rae_usage += frame.get("rae", 0)
+                energy_balance += frame.get("energy_balance", 0)
             _LOGGER.info(f"Yearly usage totals: fae={fae_usage}, rae={rae_usage}")
 
         return {
@@ -374,7 +380,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_sold": total_sold,
             "total_cost": total_cost,
             "fae_usage": fae_usage,
-            "rae_usage": rae_usage
+            "rae_usage": rae_usage,
+            "energy_balance": energy_balance
         }
 
     async def async_restore(self):
