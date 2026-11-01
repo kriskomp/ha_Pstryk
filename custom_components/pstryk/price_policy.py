@@ -38,6 +38,23 @@ COST_KEEP_FREE = 1
 STARTUP_COST_GRACE = timedelta(minutes=10)
 
 
+def covers(start: str, now: datetime) -> bool:
+    """Whether the hour entry `start` is the hour that contains `now`.
+
+    With a UTC offset (2.3.1 and later): by instant, which tells the two 02:00
+    passes of a clock-back day apart. Without one (older cache): by local date
+    and hour, as before.
+    """
+    try:
+        begin = datetime.fromisoformat(start)
+    except (TypeError, ValueError):
+        return False
+    if begin.tzinfo is None:
+        return start.startswith(now.strftime("%Y-%m-%dT%H"))
+    begin = begin.astimezone(timezone.utc)
+    return begin <= now.astimezone(timezone.utc) < begin + timedelta(hours=1)
+
+
 def today_published(entries: list[dict], now: datetime) -> bool:
     """Whether cached price entries hold today's real prices, current hour included.
 
@@ -46,14 +63,13 @@ def today_published(entries: list[dict], now: datetime) -> bool:
     the key and count as published (the caller also applies the placeholder check).
     """
     day = now.strftime("%Y-%m-%d")
-    hour = now.strftime("%Y-%m-%dT%H")
     published = [
         p for p in entries
         if p.get("start", "").startswith(day)
         and p.get("price") is not None
         and ("tge_price" not in p or p["tge_price"] is not None)
     ]
-    return len(published) >= 20 and any(p["start"].startswith(hour) for p in published)
+    return len(published) >= 20 and any(covers(p["start"], now) for p in published)
 
 
 def tomorrow_fetch_due(has_tomorrow: bool, now: datetime) -> bool:

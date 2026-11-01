@@ -17,7 +17,7 @@ from .const import (
     DEFAULT_RETRY_DELAY
 )
 from .api_client import PstrykAPIClient, BudgetExhausted, ClientClosed
-from .price_policy import next_midnight_refresh, today_published, tomorrow_fetch_due
+from .price_policy import covers, next_midnight_refresh, today_published, tomorrow_fetch_due
 from .price_components import extract_components
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,6 +54,89 @@ def is_likely_placeholder_data(prices_for_day):
 
 
 PRICE_CACHE_STORE_VERSION = 1
+
+
+
+def entry_start(entry):
+    """The instant an hourly entry starts, as an aware UTC datetime (None when unreadable).
+
+    `start` is local time with its UTC offset (2026-10-25T02:00:00+02:00, then
+    ...+01:00 for the repeated hour). Compare and sort entries by this, never by
+    the string: the two 02:00 rows of a clock-change day look alike as text.
+    An entry without an offset (cache from before 2.3.1) counts as local time.
+    """
+    try:
+        parsed = dt_util.parse_datetime(entry.get("start", ""))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if parsed is None:
+        return None
+    return dt_util.as_utc(parsed)
+
+
+def with_offsets(data):
+    """Cache written before 2.3.1 (local `start` without offset), with offsets added.
+
+    Rows come in API order, so on a clock-back day the second of two rows with
+    the same ambiguous time is the second pass (fold=1) and a lone ambiguous row
+    cannot be placed and is dropped. The rest keep their data: a restart after
+    the update needs no API request. Rows that already have an offset stay as are.
+    """
+    if not data or not isinstance(data.get("prices"), list):
+        return data
+    tz = dt_util.DEFAULT_TIME_ZONE
+    rows = data["prices"]
+    if all(_has_offset(p) for p in rows):
+        return data
+
+    def ambiguous(naive):
+        return naive.replace(tzinfo=tz, fold=0).utcoffset() != naive.replace(tzinfo=tz, fold=1).utcoffset()
+
+    fixed = []
+    seen_first = set()
+    for row in rows:
+        start = row.get("start") if isinstance(row, dict) else None
+        if not isinstance(start, str) or _has_offset(row):
+            fixed.append(row)
+            continue
+        try:
+            naive = dt_util.parse_datetime(start)
+        except (TypeError, ValueError):
+            naive = None
+        if naive is None:
+            fixed.append(row)
+            continue
+        fold = 0
+        if ambiguous(naive):
+            fold = 1 if start in seen_first else 0
+            seen_first.add(start)
+        fixed.append({**row, "start": naive.replace(tzinfo=tz, fold=fold).isoformat()})
+
+    # A lone ambiguous row (its twin missing) is dropped.
+    counts = {}
+    for row in rows:
+        if isinstance(row, dict) and not _has_offset(row):
+            counts[row.get("start")] = counts.get(row.get("start"), 0) + 1
+    result = []
+    for old, new in zip(rows, fixed):
+        start = old.get("start") if isinstance(old, dict) else None
+        if isinstance(start, str) and not _has_offset(old) and counts.get(start) == 1:
+            naive = dt_util.parse_datetime(start)
+            if naive is not None and ambiguous(naive):
+                continue
+        result.append(new)
+    out = {**data, "prices": result}
+    if isinstance(data.get("prices_today"), list):
+        today = dt_util.now().strftime("%Y-%m-%d")
+        out["prices_today"] = [p for p in result if p.get("start", "").startswith(today)]
+    return out
+
+
+def _has_offset(row):
+    start = row.get("start") if isinstance(row, dict) else None
+    if not isinstance(start, str):
+        return True  # nothing to fix
+    return start[10:].count("+") + start[10:].count("-") > 0 or start.endswith("Z")
 
 
 class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
@@ -161,7 +244,7 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
         if cached and self.entry_id and cached.get("owner") != self.entry_id:
             _LOGGER.info("Cache for %s was written by another entry; not using it", self.price_type)
             return None
-        return cached
+        return with_offsets(cached)
 
     def _check_has_valid_tomorrow(self, data: dict) -> bool:
         now = dt_util.now()
@@ -337,7 +420,7 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning("Invalid datetime format in frames for %s", self.price_type)
                     continue
 
-                local_start = dt_util.as_local(start).strftime("%Y-%m-%dT%H:%M:%S")
+                local_start = dt_util.as_local(start).isoformat()
                 pricing = f.get("metrics", {}).get("pricing", {})
                 prices.append({
                     "start": local_start,

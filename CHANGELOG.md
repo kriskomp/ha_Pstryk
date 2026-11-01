@@ -6,6 +6,30 @@ Wersje do 2.1.4 włącznie: [oryginał balgerion/ha_Pstryk](https://github.com/b
 
 Kod polecający Pstryk: **1ML2X7**.
 
+## 2.3.1
+
+- **Zmiana czasu (zgłoszenie [#11](https://github.com/kriskomp/ha_Pstryk/issues/11)).** W dniu, w którym zegary
+  cofają się (25.10.2026 o 03:00 → 02:00), doba ma 25 godzin i godzina 02:00 występuje dwa razy. Do 2.3.0 oba
+  wpisy miały ten sam `start` (`2026-10-25T02:00:00`), więc w drugiej godzinie 02:00 bieżąca cena była
+  nieznana, JSON-y pokazywały cenę z pierwszej, a „Next hour” w 02:30 po cofnięciu szukało godziny 03:00
+  zamiast drugiej 02:00. Przy przestawieniu na czas letni (28.03.2027) „Next hour” o 01:30 było puste, bo
+  02:00 nie istnieje. Teraz wszystko liczy się po chwili w czasie UTC, nie po zegarze ściennym:
+  - bieżąca cena, „Next hour”, średnia z pozostałych godzin, najdłuższy ciąg równych cen i kolejność
+    wpisów (także w MQTT/EVCC, gdzie doba ma 25 godzin, a nie 24) – po chwili;
+  - po restarcie pamięć podręczna cen jest zachowana (zapytanie do API **nie** jest wysyłane). Wpisy z 2.3.0
+    dostają przesunięcie: z dwóch wpisów o tym samym `start` drugi uznawany jest za drugie przejście
+    przez 02:00. Pojedynczy niejednoznaczny wpis 02:00 (bez pary) jest pomijany. Jeśli pamięć nie ma ceny
+    bieżącej godziny, start pobiera ceny z API.
+  - **Zmiana formatu atrybutu `start`** w atrybutach `All prices`, `Best prices` i `Worst prices` sensorów
+    cen: zamiast `2026-10-25T02:00:00` jest teraz czas lokalny **z przesunięciem UTC**,
+    `2026-10-25T02:00:00+02:00` (pierwsze przejście) i `2026-10-25T02:00:00+01:00` (drugie). Tak jest już w
+    sensorach JSON (`time`). **Jeśli masz automację, która porównuje `start` z tekstem**, usuń z niej
+    `.split('+')[0]`: wyrażenie `now().replace(minute=0, second=0, microsecond=0).isoformat(timespec='seconds')`
+    daje teraz dokładnie taki sam tekst, jaki jest w `start`. Wyrażenie z `.split('+')[0]` przestanie
+    pasować do żadnej godziny, więc automacja nic nie włączy.
+  - Dziękuję mnarozny za zgłoszenie i propozycję poprawki w [PR #6 w jego forku](https://github.com/mnarozny/ha_Pstryk/pull/6)
+    (migracja pamięci podręcznej `with_offsets`, `entry_start`, `covers`); poprawka przepisana pod obecny kod.
+
 ## 2.3.0
 
 - **Zakup na równi ze sprzedażą.** Nowe encje (dane już były w pobieranych odpowiedziach, **bez dodatkowych
