@@ -95,3 +95,38 @@ def test_release_gives_a_claimed_slot_back():
     budget.release(_utc(10, 5))
     budget.release(_utc(9, 0))  # unknown stamp: nothing to give back
     assert budget.claim(_utc(10, 6))
+
+
+def test_describe_an_empty_budget():
+    info = RequestBudget(3).describe(_utc(10, 5))
+    assert info == {"limit": 3, "used": 0, "sent": [], "room_now": True, "free_at": None, "blocked_until": None}
+
+
+def test_describe_a_full_budget_names_the_slot_that_frees_next():
+    budget = RequestBudget(3)
+    for minute in (5, 20, 25):
+        budget.claim(_utc(10, minute))
+    info = budget.describe(_utc(10, 30))
+    assert info["used"] == 3 and info["room_now"] is False
+    assert info["sent"] == [_utc(10, 5), _utc(10, 20), _utc(10, 25)]
+    assert info["free_at"] == _utc(11, 5)  # an hour after the oldest request
+    assert info["blocked_until"] is None
+    # Describing does not claim or change anything.
+    assert budget.used(_utc(10, 30)) == 3 and budget.describe(_utc(10, 30)) == info
+
+
+def test_describe_forgets_requests_older_than_the_window():
+    budget = RequestBudget(3)
+    budget.claim(_utc(9, 0))
+    budget.claim(_utc(10, 20))
+    info = budget.describe(_utc(10, 30))
+    assert info["used"] == 1 and info["sent"] == [_utc(10, 20)] and info["room_now"] is True
+
+
+def test_describe_shows_a_429_block_until_it_ends():
+    budget = RequestBudget(3)
+    budget.block_until(_utc(11, 0))
+    info = budget.describe(_utc(10, 30))
+    assert info["room_now"] is False and info["blocked_until"] == _utc(11, 0) and info["free_at"] == _utc(11, 0)
+    after = budget.describe(_utc(11, 0))
+    assert after["blocked_until"] is None and after["room_now"] is True and after["free_at"] is None

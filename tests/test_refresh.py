@@ -181,6 +181,13 @@ def _stubs():
             SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement", TOTAL="total", TOTAL_INCREASING="total_increasing"),
             SensorDeviceClass=types.SimpleNamespace(MONETARY="monetary", TIMESTAMP="timestamp", ENERGY="energy"),
         ),
+        "homeassistant.helpers.entity_registry": _stub(
+            "homeassistant.helpers.entity_registry",
+            async_get=lambda hass: hass.registry,
+            async_entries_for_config_entry=lambda registry, entry_id: [
+                e for e in registry.entities if e.config_entry_id == entry_id
+            ],
+        ),
         "homeassistant.loader": _stub("homeassistant.loader", async_get_integration=None),
         "aiohttp": aiohttp,
         "pstryk": package,
@@ -201,6 +208,7 @@ def mods():
             poll=importlib.import_module("pstryk.tomorrow_poll"),
             sensor=importlib.import_module("pstryk.sensor"),
             button=importlib.import_module("pstryk.button"),
+            diagnostics=importlib.import_module("pstryk.diagnostics"),
         )
     finally:
         for name in [n for n in sys.modules if n == "pstryk" or n.startswith("pstryk.")]:

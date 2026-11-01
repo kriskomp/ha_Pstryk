@@ -94,6 +94,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         # for up to an hour after every restart.
         self._store = Store(hass, COST_DATA_STORE_VERSION, f"{DOMAIN}_cost_data")
         self._saved = {}
+        # What the last cost run did, for the diagnostics (see _note_run).
+        self.last_run = None
+        self._catch_up_at = None
 
         if retry_attempts is None:
             retry_attempts = DEFAULT_RETRY_ATTEMPTS
@@ -486,6 +489,20 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         return [part for part, periods in COST_PARTS.items()
                 if not all(self._period_current(p, now) for p in periods)]
 
+    def _note_run(self, reason, outcome, parts=()):
+        """Remember the latest cost run (or the reason there was none) for diagnostics."""
+        self.last_run = {
+            "at": dt_util.utcnow(),
+            "reason": reason,
+            "outcome": outcome,
+            "parts": list(parts),
+            "waiting": dict(self._blocked),
+        }
+
+    def catch_up_time(self):
+        """When the one-off catch-up of missing cost parts is booked, else None."""
+        return self._catch_up_at if self._unsub_catch_up else None
+
     async def _async_run(self, parts, keep_free, reason) -> str:
         """One cost fetch of `parts`; then a catch-up for parts still missing."""
         if self.api_client.closed:
@@ -501,6 +518,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Cost update (%s) failed: %s - next try at :05:30", reason, err)
             if not self.data:
                 self.last_update_success = False  # nothing to show; data kept otherwise
+            self._note_run(reason, "failed", parts)
             self._schedule_catch_up()
             return "failed"
         if data:
@@ -509,9 +527,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             self.async_update_listeners()
             await self._async_save(data)
         self._schedule_catch_up()
-        if not data:
-            return "budget"
-        return "partial" if self._blocked else "fetched"
+        outcome = "budget" if not data else ("partial" if self._blocked else "fetched")
+        self._note_run(reason, outcome, parts)
+        return outcome
 
     def async_shutdown_timers(self):
         """Cancel the hourly run and a pending catch-up (entry unload/reload)."""
@@ -544,6 +562,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         # A regular run before it reschedules or cancels it (see _async_run).
         _LOGGER.info("Cost data (%s) will be fetched at %s, when the API limit frees",
                      ", ".join(waiting), dt_util.as_local(run_at).strftime("%H:%M:%S"))
+        self._catch_up_at = run_at
         self._unsub_catch_up = async_track_point_in_time(
             self.hass, self._handle_catch_up, dt_util.as_utc(run_at)
         )
@@ -576,15 +595,18 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         missing = self.missing_parts(now)
         if not missing:
             _LOGGER.debug("Cost data restored for every period; next update at :05:30")
+            self._note_run("start-up", "restored")
             return "restored"
         if not startup_cost_fetch_due(now, missing):
             _LOGGER.debug("Cost data missing (%s); the :05:30 update is close", missing)
+            self._note_run("start-up", "next_run_soon", missing)
             return "next_run_soon"
         tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
         keep_free = cost_keep_free(now, tomorrow)
         if not self.api_client.budget_room_soon(keep_free=keep_free):
             self._block_all_until_free(keep_free)
             self._schedule_catch_up()
+            self._note_run("start-up", "budget", missing)
             return "budget"
         _LOGGER.info("Cost data missing (%s); fetching now (start-up)", ", ".join(missing))
         return await self._async_run(missing, keep_free, "start-up")
@@ -594,6 +616,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
         if not cost_run_allowed(local_now, tomorrow):
             _LOGGER.debug("Skipping cost update at %s: prices first", local_now.strftime("%H:%M"))
+            self._note_run("hourly", "skipped")
             self.schedule_hourly_update()
             return
         keep_free = cost_keep_free(local_now, tomorrow)
@@ -602,6 +625,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("Cost update at %s waits for the API limit", local_now.strftime("%H:%M"))
                 self._block_all_until_free(keep_free)
                 self._schedule_catch_up()
+                self._note_run("hourly", "waits", tuple(COST_PARTS))
                 return
             _LOGGER.debug("Triggering cost update")
             await self._async_run(tuple(COST_PARTS), keep_free, "hourly")

@@ -69,6 +69,23 @@ class RequestBudget:
         if self.blocked_until is None or until > self.blocked_until:
             self.blocked_until = until
 
+    def describe(self, now: datetime) -> dict:
+        """The state of the budget for diagnostics (read-only apart from pruning).
+
+        sent: the requests in the window, oldest first; room_now: whether one more
+        would be allowed; free_at: when the next one will be (None if now).
+        """
+        self._prune(now)
+        blocked = self.blocked_until if self.blocked_until and now < self.blocked_until else None
+        return {
+            "limit": self.limit,
+            "used": len(self._times),
+            "sent": list(self._times),
+            "room_now": self.has_room(now),
+            "free_at": self.free_at(now),
+            "blocked_until": blocked,
+        }
+
     def to_dict(self, now: datetime) -> dict:
         self._prune(now)
         blocked = self.blocked_until if self.blocked_until and now < self.blocked_until else None
