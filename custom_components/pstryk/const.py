@@ -42,10 +42,14 @@ CONF_JSON_SENSOR = "json_sensor_enabled"
 
 CONF_RETRY_ATTEMPTS = "retry_attempts"
 CONF_RETRY_DELAY = "retry_delay"
-DEFAULT_RETRY_ATTEMPTS = 5
+# Attempts per request, the first one included. Every attempt is one of the
+# API_HOURLY_LIMIT requests an hour that prices and costs share, so more than
+# that can never be sent, and a failing API would spend the whole hour on
+# retries. Two (one retry) leaves a slot for the next job.
+DEFAULT_RETRY_ATTEMPTS = 2
 DEFAULT_RETRY_DELAY = 30
 MIN_RETRY_ATTEMPTS = 1
-MAX_RETRY_ATTEMPTS = 10
+MAX_RETRY_ATTEMPTS = API_HOURLY_LIMIT
 MIN_RETRY_DELAY = 5
 MAX_RETRY_DELAY = 300
 
@@ -56,3 +60,17 @@ CONF_AIO_ACTION = "aio_action"
 AIO_ACTION_DISABLE = "disable"
 AIO_ACTION_REMOVE = "remove"
 ISSUE_MIGRATED = "migrated_from_aio"
+
+
+def retry_attempts_setting(value) -> int:
+    """The attempts to use for a stored setting.
+
+    Up to 2.2.x the limit of the setting was 10 and the default 5, but only
+    API_HOURLY_LIMIT requests an hour can be sent, so a stored larger value is
+    used as the largest meaningful one (the extra attempts only waited for a
+    slot that could not come). Anything unusable gives the default.
+    """
+    try:
+        return max(MIN_RETRY_ATTEMPTS, min(MAX_RETRY_ATTEMPTS, int(value)))
+    except (TypeError, ValueError):
+        return DEFAULT_RETRY_ATTEMPTS

@@ -811,6 +811,55 @@ def test_options_choice_has_no_fresh_option_and_no_preset(mods):
     assert key.default == "<none>" and form["data_schema"][key][1]["options"] == ["disable", "remove"]
 
 
+# ----------------------------------------------------------- retry settings
+
+def _field(form, name):
+    key, = [k for k in form["data_schema"] if k.schema == name]
+    return key.default, form["data_schema"][key]
+
+
+def test_retry_defaults_fit_the_api_limit(mods):
+    """5 attempts could never all be sent: only 3 requests an hour exist."""
+    const = mods.const
+    assert const.DEFAULT_RETRY_ATTEMPTS == 2 and const.DEFAULT_RETRY_DELAY == 30
+    assert const.MAX_RETRY_ATTEMPTS == const.API_HOURLY_LIMIT == 3
+    assert const.MIN_RETRY_ATTEMPTS <= const.DEFAULT_RETRY_ATTEMPTS <= const.MAX_RETRY_ATTEMPTS
+
+
+@pytest.mark.parametrize("stored, used", [
+    (5, 3), (10, 3), (3, 3), (2, 2), (1, 1), (0, 1), (-4, 1), ("4", 3), ("2", 2), (2.0, 2),
+    (None, 2), ("x", 2), ([], 2),
+])
+def test_stored_retry_attempts_are_used_within_the_limit(mods, stored, used):
+    assert mods.const.retry_attempts_setting(stored) == used
+
+
+def test_first_configuration_offers_and_saves_the_new_defaults(mods):
+    hass, aio, fork = _setup(mods, with_marker=False)
+    flow, _ = _config_flow(mods, hass)
+    form = _run(flow.async_step_api_retry())
+    default, (coerce, limits) = _field(form, "retry_attempts")
+    assert default == 2 and limits == {"min": 1, "max": 3}
+    assert _field(form, "retry_delay")[0] == 30
+    # Accepting the form as shown (empty input) stores the same defaults.
+    result = _run(flow.async_step_api_retry({}))
+    assert result["options"]["retry_attempts"] == 2 and result["options"]["retry_delay"] == 30
+
+
+@pytest.mark.parametrize("stored, shown", [
+    ({}, 2),                      # never set
+    ({"retry_attempts": 2}, 2),
+    ({"retry_attempts": 3}, 3),
+    ({"retry_attempts": 5}, 3),   # the 2.2.x default: shown inside the allowed range
+    ({"retry_attempts": 10}, 3),
+])
+def test_options_show_the_stored_attempts_inside_the_allowed_range(mods, stored, shown):
+    hass, aio, fork = _setup(mods, with_marker=False)
+    form = _run(_options_flow(mods, hass, fork, {**BASE_OPTIONS, **stored}).async_step_init())
+    default, (coerce, limits) = _field(form, "retry_attempts")
+    assert default == shown and limits["min"] <= default <= limits["max"]
+
+
 # ------------------------------------------------------------- translations
 
 def test_flow_texts_exist_in_both_languages():

@@ -18,7 +18,8 @@ from .const import (
     CONF_RETRY_ATTEMPTS,
     CONF_RETRY_DELAY,
     DEFAULT_RETRY_ATTEMPTS,
-    DEFAULT_RETRY_DELAY
+    DEFAULT_RETRY_DELAY,
+    retry_attempts_setting,
 )
 from homeassistant.loader import async_get_integration
 from .price_components import entry_keys
@@ -52,7 +53,7 @@ async def async_setup_entry(
     sell_worst = entry.options.get("sell_worst", entry.data.get("sell_worst", 5))
     mqtt_48h_mode = entry.options.get(CONF_MQTT_48H_MODE, False)
     json_sensor_enabled = entry.options.get(CONF_JSON_SENSOR, False)
-    retry_attempts = entry.options.get(CONF_RETRY_ATTEMPTS, DEFAULT_RETRY_ATTEMPTS)
+    retry_attempts = retry_attempts_setting(entry.options.get(CONF_RETRY_ATTEMPTS, DEFAULT_RETRY_ATTEMPTS))
     retry_delay = entry.options.get(CONF_RETRY_DELAY, DEFAULT_RETRY_DELAY)
 
     _LOGGER.debug("Setting up Pstryk sensors with buy_top=%d, sell_top=%d, buy_worst=%d, sell_worst=%d, mqtt_48h_mode=%s, retry_attempts=%d, retry_delay=%ds", 

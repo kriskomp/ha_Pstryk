@@ -803,6 +803,15 @@ def test_averages_without_entity_state_come_from_restored_cost(mods, env):
     assert daily.native_value == 2.0
 
 
+def test_setup_clamps_a_stored_retry_setting_to_the_api_limit(mods):
+    """The coordinators get the attempts through retry_attempts_setting: a 5
+    stored by 2.2.x would otherwise wait for slots that cannot exist."""
+    import inspect
+    src = inspect.getsource(mods.sensor.async_setup_entry)
+    assert "retry_attempts_setting(entry.options.get(CONF_RETRY_ATTEMPTS" in src
+    assert src.count("retry_attempts") >= 3  # read once, handed to every coordinator
+
+
 def test_every_sensor_is_pushed_never_polled(mods):
     """No sensor relies on Home Assistant's 30 s polling: each one is updated by
     its coordinator. A polled sensor with a "Last updated" attribute would write

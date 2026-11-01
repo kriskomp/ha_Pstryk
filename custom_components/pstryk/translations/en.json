@@ -49,11 +49,11 @@
         "title": "API Reliability",
         "description": "Configure retry behavior for API failures",
         "data": {
-          "retry_attempts": "Retry attempts",
+          "retry_attempts": "Attempts (including the first)",
           "retry_delay": "Retry delay (seconds)"
         },
         "data_description": {
-          "retry_attempts": "Number of times to retry failed API requests",
+          "retry_attempts": "Attempts per request, the first one included (1-3). The Pstryk API allows 3 requests per hour in total, so more attempts make no sense and, when the API is down, each one uses up the limit. Recommended: 2",
           "retry_delay": "Wait time between retry attempts"
         }
       },
@@ -90,7 +90,7 @@
           "mqtt_topic_buy": "MQTT Topic for Buy Prices",
           "mqtt_topic_sell": "MQTT Topic for Sell Prices",
           "mqtt_48h_mode": "Enable 48h mode for MQTT",
-          "retry_attempts": "API retry attempts",
+          "retry_attempts": "API attempts (including the first)",
           "retry_delay": "API retry delay (seconds)",
           "json_sensor_enabled": "Enable JSON price sensors",
           "take_over_aio": "Take over Pstryk AiO"
@@ -104,7 +104,7 @@
           "mqtt_topic_buy": "MQTT topic where buy prices will be published",
           "mqtt_topic_sell": "MQTT topic where sell prices will be published",
           "mqtt_48h_mode": "Publish 48 hours of prices (today + tomorrow) instead of just today",
-          "retry_attempts": "How many times to retry API requests on failure",
+          "retry_attempts": "Attempts per request, the first one included (1-3). The Pstryk API allows 3 requests per hour in total, so more attempts make no sense and, when the API is down, each one uses up the limit. Recommended: 2",
           "retry_delay": "Wait time between API retry attempts",
           "json_sensor_enabled": "Adds Pstryk Json Buy/Sell sensors with standardized prices_today, prices_tomorrow and prices attributes (compatible with EV Smart Charging, cheapest-energy-hours etc.)",
           "take_over_aio": "Opens the next step: move the entities of Pstryk AiO to this integration (keeping ids, names and history)"
@@ -146,11 +146,11 @@
         "title": "API Configuration",
         "description": "Configure API retry behavior for improved reliability",
         "data": {
-          "retry_attempts": "API retry attempts",
+          "retry_attempts": "API attempts (including the first)",
           "retry_delay": "API retry delay (seconds)"
         },
         "data_description": {
-          "retry_attempts": "How many times to retry API requests on failure",
+          "retry_attempts": "Attempts per request, the first one included (1-3). The Pstryk API allows 3 requests per hour in total, so more attempts make no sense and, when the API is down, each one uses up the limit. Recommended: 2",
           "retry_delay": "Wait time between API retry attempts"
         }
       },

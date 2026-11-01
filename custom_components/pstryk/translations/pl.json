@@ -49,11 +49,11 @@
         "title": "Niezawodność API",
         "description": "Skonfiguruj zachowanie przy błędach API",
         "data": {
-          "retry_attempts": "Liczba prób",
+          "retry_attempts": "Liczba prób (z pierwszą)",
           "retry_delay": "Opóźnienie między próbami (sekundy)"
         },
         "data_description": {
-          "retry_attempts": "Ile razy ponawiać nieudane żądania API",
+          "retry_attempts": "Ile prób wykonać na jedno zapytanie, licząc pierwszą (1–3). API Pstryka pozwala łącznie na 3 zapytania na godzinę, więc więcej prób nie ma sensu, a przy awarii API każda kolejna zużywa limit. Zalecane: 2",
           "retry_delay": "Czas oczekiwania między próbami"
         }
       },
@@ -126,11 +126,11 @@
         "title": "Konfiguracja API",
         "description": "Skonfiguruj zachowanie przy błędach API dla lepszej niezawodności",
         "data": {
-          "retry_attempts": "Liczba prób połączenia z API",
+          "retry_attempts": "Liczba prób połączenia z API (z pierwszą)",
           "retry_delay": "Opóźnienie między próbami (sekundy)"
         },
         "data_description": {
-          "retry_attempts": "Ile razy ponawiać żądania API w przypadku błędu",
+          "retry_attempts": "Ile prób wykonać na jedno zapytanie, licząc pierwszą (1–3). API Pstryka pozwala łącznie na 3 zapytania na godzinę, więc więcej prób nie ma sensu, a przy awarii API każda kolejna zużywa limit. Zalecane: 2",
           "retry_delay": "Czas oczekiwania między próbami połączenia z API"
         }
       },

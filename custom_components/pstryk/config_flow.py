@@ -23,7 +23,8 @@ from .const import (
     MIN_RETRY_ATTEMPTS,
     MAX_RETRY_ATTEMPTS,
     MIN_RETRY_DELAY,
-    MAX_RETRY_DELAY
+    MAX_RETRY_DELAY,
+    retry_attempts_setting,
 )
 
 from .api_client import async_validate_api_key
@@ -299,8 +300,8 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
             })
         
         schema.update({
-            vol.Optional(CONF_RETRY_ATTEMPTS, default=self.config_entry.options.get(
-                CONF_RETRY_ATTEMPTS, DEFAULT_RETRY_ATTEMPTS)): 
+            vol.Optional(CONF_RETRY_ATTEMPTS, default=retry_attempts_setting(self.config_entry.options.get(
+                CONF_RETRY_ATTEMPTS, DEFAULT_RETRY_ATTEMPTS))): 
                     vol.All(vol.Coerce(int), vol.Range(min=MIN_RETRY_ATTEMPTS, max=MAX_RETRY_ATTEMPTS)),
             vol.Optional(CONF_RETRY_DELAY, default=self.config_entry.options.get(
                 CONF_RETRY_DELAY, DEFAULT_RETRY_DELAY)): 
