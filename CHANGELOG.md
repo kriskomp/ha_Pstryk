@@ -24,6 +24,17 @@ Kod polecający Pstryk: **1ML2X7**.
     wartość nieznaną do najbliższego pobrania kosztów o pełnej godzinie :05:30.
   Nazwy w szyku „okres → kierunek → wielkość”, ikony według zasady z 2.2.5 (`mdi:transmission-tower` dla
   bilansu energii).
+- **Średnie ceny nie zapisują się już do bazy co 30 sekund.** Sześć encji średnich (`sensor.pstryk_buy_daily_average`,
+  `_monthly_`, `_yearly_` i odpowiedniki `sell`) nie miało wyłączonego odpytywania (błąd z oryginału), więc Home
+  Assistant odświeżał je co 30 s, a zmieniający się atrybut „Last updated” robił z każdego odświeżenia nowy wiersz
+  w historii (ok. 17 000 na dobę). Teraz aktualizują się tylko przy nowych danych kosztów, jak pozostałe encje.
+- **Dane dzienne pobierane przed miesięcznymi** (start i każde godzinne pobranie). Gdy limit 3 zapytań na
+  godzinę ma miejsce tylko na jedno, dostają je encje dzisiejsze; miesięczne, roczne i sumy `total` są
+  dociągane przy najbliższym wolnym miejscu. Dotąd było odwrotnie: po świeżej instalacji encje dzienne były puste
+  przez ok. godzinę (sprawdzenie klucza, ceny i dane miesięczne zajmowały cały limit).
+- **Przejęcie z działającego Pstryk AiO nie sprawdza klucza API osobnym zapytaniem** – AiO właśnie go używa.
+  Dzięki temu w pierwszej godzinie mieszczą się ceny, dane dzienne i miesięczne. Klucz AiO, które nie jest
+  załadowane (wyłączone, błąd startu), jest sprawdzany jak dotąd.
 - **Średnie ceny liczone tylko z energii rozliczonej przez Pstryk** (koszt/przychód > 0): miesiące sprzed umowy mają odczyty licznika, ale zerowy koszt, i zaniżały średnią (np. 0,05 zł/kWh). Wolumeny zostają dosłowne; dane zapisane przez 2.2.x dają średnią nieznaną do następnego przeliczenia kosztów.
 - **Wszystkie sześć średnich cen znów włączone domyślnie**, tak jak w oryginale. Wersja 2.2.1 wyłączyła cztery
   (`sensor.pstryk_buy_daily_average`, `_buy_monthly_`, `_buy_yearly_`, `sensor.pstryk_sell_daily_average`) pod
@@ -32,7 +43,8 @@ Kod polecający Pstryk: **1ML2X7**.
 - **Kreator przejęcia Pstryk AiO** ([szkocot/Pstryk-all-in-one](https://github.com/szkocot/Pstryk-all-in-one)).
   AiO i ta integracja czytają to samo API (limit 3 zapytań na godzinę), więc nie mogą działać obok siebie.
   Kreator przy dodawaniu integracji (albo w *Konfiguruj → Przejmij Pstryk AiO*, jeśli fork jest już dodany):
-  - przejmuje **klucz API z AiO** (sprawdzany jednym zapytaniem) – nic nie trzeba wpisywać,
+  - przejmuje **klucz API z AiO** (bez zapytania, gdy AiO działa; inaczej sprawdzany jednym zapytaniem) – nic
+    nie trzeba wpisywać,
   - pokazuje przed zatwierdzeniem, co zrobi, i każe wybrać: przejmij i **wyłącz** AiO, przejmij i **usuń**
     AiO albo nie przejmuj (zwykła konfiguracja); żadna opcja nie jest ustawiona z góry,
   - zatrzymuje AiO (inaczej oba czytałyby API naraz) i **przenosi 14 encji** AiO do forka z zachowaniem

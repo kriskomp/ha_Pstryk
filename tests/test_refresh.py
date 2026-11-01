@@ -728,11 +728,11 @@ def _new_cost(mods, env, client, coords, entry_id="e"):
 
 
 async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
-    """Full run at 13:50 on Oct 2, daily only at 14:50, then a restart at `restart_at`.
+    """Full run at 13:50 on Oct 2, one request only at 14:50 (daily), then a restart at `restart_at`.
 
-    Cost frames carry their request number: 12:05 prices is 1, 13:50 monthly 2 and
-    daily 3 (fork: the month request goes first), the other call at 14:30 is 4,
-    14:50 monthly 5.
+    Cost frames carry their request number: 12:05 prices is 1, 13:50 daily 2 and
+    monthly 3 (fork 2.3.0: the day request goes first), the other call at 14:30 is 4,
+    14:50 daily 5.
     """
     env.hass.session.cost_frames = True
     # Fork: keep one slot as the original policy did, so the 14:50 run is partial.
@@ -764,12 +764,12 @@ async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
 def test_cost_data_survives_a_restart_without_a_request(mods, env):
     full, sent, restarted, _ = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
     assert sorted(full) == ["daily", "history", "monthly", "yearly"]
-    assert full["monthly"]["total_balance"] == 2
-    assert sent == 5  # the daily call at 14:50 was refused
+    assert full["monthly"]["total_balance"] == 3
+    assert sent == 5  # the month call at 14:50 was refused
     assert len(env.hass.session.sent) == sent  # restoring sent nothing
     assert restarted.last_update_success is True
-    assert restarted.data["monthly"]["total_balance"] == 5  # from 14:50
-    assert restarted.data["daily"] == full["daily"]  # from 13:50, kept through the partial run
+    assert restarted.data["daily"]["total_balance"] == 5  # from 14:50: the day goes first
+    assert restarted.data["monthly"] == full["monthly"]  # from 13:50, kept through the partial run
 
 
 def test_cost_data_of_another_entry_is_not_restored(mods, env):
@@ -801,6 +801,19 @@ def test_averages_without_entity_state_come_from_restored_cost(mods, env):
     daily = _average(mods, restarted, coords, "daily")
     assert daily.available is True
     assert daily.native_value == 2.0
+
+
+def test_every_sensor_is_pushed_never_polled(mods):
+    """No sensor relies on Home Assistant's 30 s polling: each one is updated by
+    its coordinator. A polled sensor with a "Last updated" attribute would write
+    a new state row every 30 s (the six averages did, up to 2.3.0)."""
+    import inspect
+    classes = [c for _, c in inspect.getmembers(mods.sensor, inspect.isclass)
+               if c.__module__ == mods.sensor.__name__ and issubclass(c, mods.sensor.SensorEntity)]
+    assert mods.sensor.PstrykAveragePriceSensor in classes
+    for cls in classes:
+        pushed = issubclass(cls, mods.sensor.CoordinatorEntity) or cls.__dict__.get("_attr_should_poll") is False
+        assert pushed, cls.__name__
 
 
 def test_fork_averages_use_only_the_energy_pstryk_billed(mods, env):
@@ -1387,8 +1400,9 @@ def test_fork_start_just_before_the_hourly_run_waits_for_it(mods, env):
 def test_fork_restart_with_little_budget_catches_up_and_returns_to_the_rhythm(mods, env):
     """First install 16:09:38 (prices), another request 16:20, restart with v2.2.0 at 16:38.
 
-    One slot is left at 16:38: the month request gets it (monthly, yearly, totals),
-    the day request waits. It is caught up as soon as a slot frees, not at 18:05:30.
+    One slot is left at 16:38: the day request gets it (fork 2.3.0: today's sensors
+    first), the month request (monthly, yearly, totals) waits. It is caught up as
+    soon as a slot frees, not at 18:05:30.
     """
     env.hass.session.cost_frames = True
 
@@ -1423,12 +1437,12 @@ def test_fork_restart_with_little_budget_catches_up_and_returns_to_the_rhythm(mo
 
     result, after_start, catch_up, (after, at), runs, cost = _run(scenario())
     assert result == "partial"
-    assert after_start == ["history", "monthly", "yearly"]  # month first: totals at once
+    assert after_start == ["daily"]  # day first: today's sensors at once
     # The slot of 16:09:38 frees at 17:09:40 (1 h + 2 s margin, as in the log); catch-up
     # 10 s later, after a price fetch waiting for the same slot (slot + 5 s).
     assert catch_up[0].astimezone(TZ) == datetime(2026, 10, 2, 17, 9, 50, tzinfo=TZ)
     assert after == ["daily", "history", "monthly", "yearly"]
-    assert at < datetime(2026, 10, 2, 17, 10, tzinfo=TZ)  # daily by 17:10, not 18:05:30
+    assert at < datetime(2026, 10, 2, 17, 10, tzinfo=TZ)  # month by 17:10, not 18:05:30
     assert runs == [2, 2]  # back in the :05:30 rhythm
     assert cost.last_update_success is True
     assert env.hass.session.max_in_any_hour() <= 3
@@ -1448,6 +1462,7 @@ def test_fork_no_catch_up_when_every_period_is_current(mods, env):
 
 def test_fork_budget_refusal_is_not_logged_as_a_warning(mods, env, caplog):
     import logging
+    env.hass.session.cost_frames = True  # the day request goes first and is answered
 
     async def scenario():
         _at(2, 16, 9, 38)

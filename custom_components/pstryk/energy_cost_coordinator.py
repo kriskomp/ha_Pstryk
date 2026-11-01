@@ -29,9 +29,12 @@ COST_DATA_STORE_VERSION = 1
 # A saved period is restored only within the day, month or year it was fetched in.
 PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "yearly": "%Y", "history": "%Y"}
 
-# The two cost requests and the periods each one feeds. "month" goes first: it
-# feeds three periods and every total sensor, so it gets a lone free slot.
-COST_PARTS = {"month": ("monthly", "yearly", "history"), "day": ("daily",)}
+# The two cost requests and the periods each one feeds, in fetch order. Day
+# first (2.3.0; "month" went first before): when the hourly limit leaves room for only one
+# request (right after installation, after a restart, at the 11-12 h price
+# reserve), today's sensors get it; the month request (monthly, yearly and the
+# all-time history) follows on the next free slot.
+COST_PARTS = {"day": ("daily",), "month": ("monthly", "yearly", "history")}
 # A catch-up waits this long after the slot it needs frees: longer than a
 # waiting price fetch (slot + 5 s), so prices get the slot first.
 CATCH_UP_MARGIN = timedelta(seconds=10)
@@ -96,7 +99,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             name=f"{DOMAIN}_cost",
         )
 
-    async def _async_update_data(self, parts=("month", "day")):
+    async def _async_update_data(self, parts=tuple(COST_PARTS)):
         """Fetch the given cost parts. A part the budget refuses is recorded in
         self._blocked (normal, not an error); BudgetExhausted is raised only when
         every part was refused and nothing was fetched."""
@@ -136,7 +139,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning("Failed to fetch cost data (%s): %s", part, e)
                 return None
 
-            for part in ("month", "day"):
+            for part in COST_PARTS:
                 if part not in parts:
                     continue
                 if part == "month":

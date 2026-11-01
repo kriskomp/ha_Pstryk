@@ -1,4 +1,5 @@
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntryState
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
@@ -69,6 +70,22 @@ def _aio_placeholders(hass, entries):
     }
 
 
+async def _aio_key_usable(hass, aio, key):
+    """Whether AiO's API key can be taken over: True, False, or None (no API slot).
+
+    A loaded AiO entry has just used this key (its set-up fails on a refused
+    key), so it is taken without a request of its own: the 3 requests an hour
+    are then left for prices and costs, and the first cost data comes at once
+    instead of an hour later. An AiO entry that is not loaded (disabled, or
+    failing to start) proves nothing, so its key is checked like a typed one.
+    """
+    if not key:
+        return False
+    if aio.state is ConfigEntryState.LOADED:
+        return True
+    return await async_validate_api_key(hass, key)
+
+
 class MQTTNotConfiguredError(HomeAssistantError):
     pass
 
@@ -117,7 +134,7 @@ class PstrykConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_user()
             aio = next((e for e in entries if e.entry_id == user_input.get(CONF_AIO_ENTRY, entries[0].entry_id)), None)
             key = aio_api_key(aio) if aio else None
-            valid = await async_validate_api_key(self.hass, key) if key else False
+            valid = await _aio_key_usable(self.hass, aio, key)
             if valid:
                 self._data.update({"api_key": key, CONF_MIGRATE_FROM: aio.entry_id, CONF_AIO_ACTION: mode})
                 return await self.async_step_price_settings()

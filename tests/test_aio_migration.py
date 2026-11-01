@@ -109,6 +109,7 @@ class Entry:
         self.entry_id, self.domain, self.title = entry_id, domain, title or domain
         self.data, self.options = dict(data or {}), dict(options or {})
         self.disabled_by = None
+        self.state = "not_loaded"
         self.update_listeners = []
 
 
@@ -697,6 +698,35 @@ def test_flow_a_full_api_limit_is_reported_and_nothing_is_decided(mods):
     flow, _ = _config_flow(mods, hass, valid=None)
     result = _run(flow.async_step_migrate({"mode": "disable"}))
     assert result["errors"] == {"base": "api_budget_full"} and flow._data == {}
+
+
+def test_flow_a_running_aio_hands_over_its_key_without_a_request(mods):
+    """AiO is loaded, so its key was just accepted by Pstryk: no slot of the
+    3 requests an hour is spent on checking it again."""
+    hass, aio, fork = _setup(mods, with_marker=False)
+    aio.state = mods.flow.ConfigEntryState.LOADED
+    flow, validate = _config_flow(mods, hass, valid=False)
+    _run(flow.async_step_migrate({"mode": "disable"}))
+    assert validate.keys == []
+    assert flow._data == {"api_key": AIO_KEY, mods.const.CONF_MIGRATE_FROM: "aio1",
+                          mods.const.CONF_AIO_ACTION: "disable"}
+
+
+def test_flow_a_running_aio_without_a_key_is_reported(mods):
+    hass, aio, fork = _setup(mods, with_marker=False)
+    aio.state = mods.flow.ConfigEntryState.LOADED
+    aio.data = {}
+    flow, validate = _config_flow(mods, hass)
+    result = _run(flow.async_step_migrate({"mode": "disable"}))
+    assert result["errors"] == {"base": "aio_key_invalid"} and validate.keys == [] and flow._data == {}
+
+
+def test_flow_an_aio_that_is_not_running_has_its_key_checked(mods):
+    hass, aio, fork = _setup(mods, with_marker=False)
+    aio.state = "setup_retry"  # e.g. its start failed: the key is not proven
+    flow, validate = _config_flow(mods, hass)
+    _run(flow.async_step_migrate({"mode": "disable"}))
+    assert validate.keys == [AIO_KEY] and flow._data["api_key"] == AIO_KEY
 
 
 def test_flow_several_aio_entries_ask_which_one(mods):

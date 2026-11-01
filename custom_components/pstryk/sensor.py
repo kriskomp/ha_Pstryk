@@ -709,6 +709,10 @@ class PstrykJsonPriceSensor(CoordinatorEntity, SensorEntity):
 
 class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
+    # Fork: updated by the cost coordinator's listener only. Home Assistant
+    # would otherwise poll it every 30 s, and the "Last updated" attribute
+    # (with seconds) made every poll a new state row in the recorder.
+    _attr_should_poll = False
     
     def __init__(self, cost_coordinator: PstrykCostDataUpdateCoordinator, 
                  price_coordinator: PstrykDataUpdateCoordinator,
