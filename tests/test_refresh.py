@@ -803,6 +803,34 @@ def test_averages_without_entity_state_come_from_restored_cost(mods, env):
     assert daily.native_value == 2.0
 
 
+def test_daily_log_names_the_local_day_not_the_utc_start(mods, env, caplog):
+    """The frame of 1 November starts on 31 October 23:00 UTC; the log said
+    "Live frame date: 2026-10-31", which read like yesterday's data."""
+    import logging
+
+    async def scenario():
+        _at(1, 14, 29)
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        frames = [
+            {"start": "2026-10-30T23:00:00Z", "fae_usage": 0.1, "rae": 0, "fae_cost": 0.0},
+            {"start": "2026-10-31T23:00:00Z", "is_live": True, "fae_usage": 29.9, "rae": 0,
+             "fae_cost": 21.45, "energy_balance_value": 21.45},
+        ]
+        with caplog.at_level(logging.INFO, logger="pstryk"):
+            return cost._process_daily_data_simple({"frames": frames})
+
+    # Warsaw is on winter time on 1 November 2026 (UTC+1).
+    result = _run(scenario())
+    assert result["total_cost"] == 21.45 and result["fae_billed"] == 29.9  # matching unchanged
+    messages = [r.getMessage() for r in caplog.records]
+    live = [m for m in messages if m.startswith("Live frame day")]
+    assert live and "2026-11-01" in live[0] and "2026-10-31T23:00:00Z" in live[0]
+    matched = [m for m in messages if "MATCHED cost frame" in m]
+    assert matched and "for day 2026-11-01" in matched[0]
+    assert not [m for m in messages if "Live frame date" in m]
+
+
 def test_setup_clamps_a_stored_retry_setting_to_the_api_limit(mods):
     """The coordinators get the attempts through retry_attempts_setting: a 5
     stored by 2.2.x would otherwise wait for slots that cannot exist."""

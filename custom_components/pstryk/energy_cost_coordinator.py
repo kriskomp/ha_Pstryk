@@ -65,6 +65,16 @@ def _billed(frame):
     return bought, sold
 
 
+def _local_day(start):
+    """Local calendar day (YYYY-MM-DD) of a frame's `start`, for log messages only.
+
+    Pstryk sends the start in UTC, so the frame of 1 November (Warsaw) starts on
+    "2026-10-31T23:00:00Z"; matching below compares the start strings themselves.
+    """
+    parsed = dt_util.parse_datetime(start or "")
+    return dt_util.as_local(parsed).strftime("%Y-%m-%d") if parsed else (start or "").split("T")[0]
+
+
 class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, api_client: PstrykAPIClient, retry_attempts=None, retry_delay=None, entry_id=None):
@@ -337,17 +347,17 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     live_start = frame.get("start")
                     if live_start:
                         live_date = live_start.split("T")[0]
-                        _LOGGER.info(f"Live frame date: {live_date}")
+                        _LOGGER.info(f"Live frame day: {_local_day(live_start)} (frame start {live_start})")
                     break
 
         if live_date:
-            _LOGGER.info(f"Looking for matching frame date: {live_date}")
+            _LOGGER.info(f"Looking for the cost frame of the live frame (start day {live_date} UTC)")
 
             for frame in frames:
                 frame_start = frame.get("start", "")
                 frame_date = frame_start.split("T")[0] if frame_start else ""
 
-                _LOGGER.info(f"Checking cost frame: start={frame_start}, date={frame_date}, "
+                _LOGGER.info(f"Checking cost frame: start={frame_start}, day={_local_day(frame_start)}, "
                            f"balance={frame.get('energy_balance_value', 0)}, "
                            f"cost={frame.get('fae_cost', 0)}")
 
@@ -357,11 +367,11 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     result["total_sold"] = frame.get("energy_sold_value", 0)
                     result["total_cost"] = abs(frame.get("fae_cost", 0))
                     result["fae_billed"], result["rae_billed"] = _billed(frame)
-                    _LOGGER.info(f"*** MATCHED cost frame for date {live_date}: balance={result['total_balance']}, "
+                    _LOGGER.info(f"*** MATCHED cost frame for day {_local_day(frame_start)}: balance={result['total_balance']}, "
                                f"cost={result['total_cost']}, sold={result['total_sold']} ***")
                     break
             else:
-                _LOGGER.warning(f"No unified metrics frame found matching live date {live_date}")
+                _LOGGER.warning(f"No unified metrics frame found matching the live frame (start day {live_date} UTC)")
         elif not live_date:
             _LOGGER.warning("No live frame found in unified metrics data, cannot match daily frame")
 
