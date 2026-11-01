@@ -822,22 +822,25 @@ class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
         if not period_data:
             return False
 
+        # Weighted average over the energy Pstryk billed (see _billed in
+        # energy_cost_coordinator.py). Period data saved before 2.3.0 lacks it:
+        # unknown until the next cost run, not a stale or guessed value.
         if self.price_type == "buy":
             total_cost = abs(period_data.get("total_cost", 0))
-            energy_bought = period_data.get("fae_usage", 0)
-            
-            if energy_bought > 0:
+            energy_bought = period_data.get("fae_billed")
+
+            if energy_bought is not None and energy_bought > 0:
                 self._state = round(total_cost / energy_bought, 4)
                 self._energy_bought = energy_bought
                 self._total_cost = total_cost
             else:
                 self._state = None
-                
+
         elif self.price_type == "sell":
             total_revenue = period_data.get("total_sold", 0)
-            energy_sold = period_data.get("rae_usage", 0)
-            
-            if energy_sold > 0:
+            energy_sold = period_data.get("rae_billed")
+
+            if energy_sold is not None and energy_sold > 0:
                 self._state = round(total_revenue / energy_sold, 4)
                 self._energy_sold = energy_sold
                 self._total_revenue = total_revenue
@@ -1116,17 +1119,22 @@ class PstrykFlowSensor(CoordinatorEntity, SensorEntity):
 
 # direction -> (money key, energy key) in the period data and in the yearly history
 _FLOW_KEYS = {
-    "sell": {"period": ("total_sold", "rae_usage"), "history": ("sell_revenue", "energy_sold")},
-    "buy": {"period": ("total_cost", "fae_usage"), "history": ("buy_cost", "energy_bought")},
+    "sell": {"period": ("total_sold", "rae_usage"), "history": ("sell_revenue", "energy_sold"),
+             "billed": "rae_billed", "history_billed": "energy_sold_billed"},
+    "buy": {"period": ("total_cost", "fae_usage"), "history": ("buy_cost", "energy_bought"),
+            "billed": "fae_billed", "history_billed": "energy_bought_billed"},
 }
 
 
-def _flow_totals(coordinator, period, direction="sell"):
+def _flow_totals(coordinator, period, direction="sell", billed=False):
     """Real (money PLN, kWh) of one direction for a period, straight from Pstryk data.
 
     daily/monthly/yearly: values the cost coordinator already fetched.
     total: closed years from the history + current year live.
-    Returns None when the needed data is not loaded yet.
+    billed=True counts only the energy of frames Pstryk billed something for
+    (for the weighted averages, see _billed in energy_cost_coordinator.py).
+    Returns None when the needed data is not loaded yet (or, for billed, was
+    saved before 2.3.0 and has not been refreshed).
     """
     data = coordinator.data or {}
     if period != "total":
@@ -1134,6 +1142,10 @@ def _flow_totals(coordinator, period, direction="sell"):
         if not period_data:
             return None
         money_key, energy_key = _FLOW_KEYS[direction]["period"]
+        if billed:
+            energy_key = _FLOW_KEYS[direction]["billed"]
+            if energy_key not in period_data:
+                return None
         return (abs(period_data.get(money_key, 0) or 0) if direction == "buy"
                 else (period_data.get(money_key, 0) or 0),
                 period_data.get(energy_key, 0) or 0)
@@ -1142,7 +1154,9 @@ def _flow_totals(coordinator, period, direction="sell"):
     if per_year is None:
         return None
     money_key, energy_key = _FLOW_KEYS[direction]["history"]
-    # History saved before the buy keys existed lacks them until the next cost run.
+    if billed:
+        energy_key = _FLOW_KEYS[direction]["history_billed"]
+    # History saved before these keys existed lacks them until the next cost run.
     if any(money_key not in y or energy_key not in y for y in per_year.values()):
         return None
     return (sum(y[money_key] for y in per_year.values()),
@@ -1174,6 +1188,10 @@ def _sell_per_year(coordinator):
         "buy_cost": round(yearly.get("total_cost", 0) or 0, 2),
         "energy_bought": round(yearly.get("fae_usage", 0) or 0, 3),
     }
+    # Period data saved before 2.3.0 has no billed energy: left out, not guessed.
+    if "fae_billed" in yearly and "rae_billed" in yearly:
+        result[current_year]["energy_bought_billed"] = round(yearly["fae_billed"] or 0, 3)
+        result[current_year]["energy_sold_billed"] = round(yearly["rae_billed"] or 0, 3)
     return result
 
 
@@ -1263,7 +1281,8 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
     """Real weighted average price = money / kWh of one direction for a period.
 
     Sell by default (the class name is kept for compatibility); direction "buy"
-    gives the purchase counterpart (2.3.0).
+    gives the purchase counterpart (2.3.0). Only energy of frames Pstryk billed
+    something for counts (months before the contract have kWh but no cost).
     """
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1294,14 +1313,14 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        totals = _flow_totals(self.coordinator, self.period, self.direction)
+        totals = _flow_totals(self.coordinator, self.period, self.direction, billed=True)
         if totals is None:
             return None
         return _average_price(*totals)
 
     @property
     def extra_state_attributes(self) -> dict:
-        totals = _flow_totals(self.coordinator, self.period, self.direction)
+        totals = _flow_totals(self.coordinator, self.period, self.direction, billed=True)
         if totals is None:
             return {}
         money_label, energy_label = (("Sell revenue", "Energy sold") if self.direction == "sell"
@@ -1312,7 +1331,8 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
             energy_label: round(totals[1], 3),
         }
         if self.period == "total":
-            money_key, energy_key = _FLOW_KEYS[self.direction]["history"]
+            money_key = _FLOW_KEYS[self.direction]["history"][0]
+            energy_key = _FLOW_KEYS[self.direction]["history_billed"]
             per_year = _sell_per_year(self.coordinator) or {}
             for year, entry in per_year.items():
                 avg = _average_price(entry[money_key], entry[energy_key])

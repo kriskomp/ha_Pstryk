@@ -50,6 +50,18 @@ def restorable_periods(saved, now):
     return restored
 
 
+def _billed(frame):
+    """(bought kWh, sold kWh) of a frame, counted only where Pstryk billed something.
+
+    Months before the contract come back with their meter readings but no cost
+    (or revenue). Weighted averages use only the energy that has a price, so
+    those months do not pull them down; the volumes stay as the API reports them.
+    """
+    bought = (frame.get("fae_usage", 0) or 0) if abs(frame.get("fae_cost", 0) or 0) > 0 else 0
+    sold = (frame.get("rae", 0) or 0) if (frame.get("energy_sold_value", 0) or 0) > 0 else 0
+    return bought, sold
+
+
 class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass: HomeAssistant, api_client: PstrykAPIClient, retry_attempts=None, retry_delay=None, entry_id=None):
@@ -223,16 +235,20 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 continue
             year = str(dt_util.as_local(parsed).year)
             entry = years.setdefault(year, {"sell_revenue": 0.0, "energy_sold": 0.0,
-                                            "buy_cost": 0.0, "energy_bought": 0.0})
+                                            "buy_cost": 0.0, "energy_bought": 0.0,
+                                            "energy_bought_billed": 0.0, "energy_sold_billed": 0.0})
             entry["sell_revenue"] += frame.get("energy_sold_value", 0) or 0
             entry["energy_sold"] += frame.get("rae", 0) or 0
             # Same sum as the yearly total_cost / fae_usage of the current year.
             entry["buy_cost"] += abs(frame.get("fae_cost", 0) or 0)
             entry["energy_bought"] += frame.get("fae_usage", 0) or 0
+            bought_billed, sold_billed = _billed(frame)
+            entry["energy_bought_billed"] += bought_billed
+            entry["energy_sold_billed"] += sold_billed
         for entry in years.values():
             for key in ("sell_revenue", "buy_cost"):
                 entry[key] = round(entry[key], 2)
-            for key in ("energy_sold", "energy_bought"):
+            for key in ("energy_sold", "energy_bought", "energy_bought_billed", "energy_sold_billed"):
                 entry[key] = round(entry[key], 3)
         _LOGGER.info("Sell history loaded: %s", years)
         return {"years": dict(sorted(years.items())),
@@ -248,7 +264,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_cost": 0,
             "fae_usage": 0,
             "rae_usage": 0,
-            "energy_balance": 0
+            "energy_balance": 0,
+            "fae_billed": 0,
+            "rae_billed": 0
         }
 
         frames = self._normalized_frames(response)
@@ -272,6 +290,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             result["fae_usage"] = frame.get("fae_usage", 0)
             result["rae_usage"] = frame.get("rae", 0)
             result["energy_balance"] = frame.get("energy_balance", 0)
+            result["fae_billed"], result["rae_billed"] = _billed(frame)
             _LOGGER.info(f"Monthly data from frame {frame.get('start')}: balance={result['total_balance']}, "
                         f"sold={result['total_sold']}, cost={result['total_cost']}, "
                         f"fae={result['fae_usage']}, rae={result['rae_usage']}")
@@ -288,7 +307,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_cost": 0,
             "fae_usage": 0,
             "rae_usage": 0,
-            "energy_balance": 0
+            "energy_balance": 0,
+            "fae_billed": 0,
+            "rae_billed": 0
         }
 
         live_date = None
@@ -332,6 +353,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     result["total_balance"] = frame.get("energy_balance_value", 0)
                     result["total_sold"] = frame.get("energy_sold_value", 0)
                     result["total_cost"] = abs(frame.get("fae_cost", 0))
+                    result["fae_billed"], result["rae_billed"] = _billed(frame)
                     _LOGGER.info(f"*** MATCHED cost frame for date {live_date}: balance={result['total_balance']}, "
                                f"cost={result['total_cost']}, sold={result['total_sold']} ***")
                     break
@@ -356,6 +378,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         fae_usage = 0
         rae_usage = 0
         energy_balance = 0
+        fae_billed = 0
+        rae_billed = 0
 
         frames = self._normalized_frames(response)
 
@@ -372,6 +396,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 fae_usage += frame.get("fae_usage", 0)
                 rae_usage += frame.get("rae", 0)
                 energy_balance += frame.get("energy_balance", 0)
+                bought_billed, sold_billed = _billed(frame)
+                fae_billed += bought_billed
+                rae_billed += sold_billed
             _LOGGER.info(f"Yearly usage totals: fae={fae_usage}, rae={rae_usage}")
 
         return {
@@ -381,7 +408,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_cost": total_cost,
             "fae_usage": fae_usage,
             "rae_usage": rae_usage,
-            "energy_balance": energy_balance
+            "energy_balance": energy_balance,
+            "fae_billed": fae_billed,
+            "rae_billed": rae_billed
         }
 
     async def async_restore(self):

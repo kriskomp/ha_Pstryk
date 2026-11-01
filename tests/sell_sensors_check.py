@@ -296,8 +296,62 @@ async def main():
     check("buy totals use the cost as a positive number", S._flow_totals(c, "monthly", "buy")[0] == cost_before)
     c.data["monthly"]["total_cost"] = cost_before
 
+
+    # months before the contract: meter readings but no cost and no revenue
+    pre = [(f"2025-12-31T23:00:00Z", 0.0), ("2026-01-31T23:00:00Z", 0.0), ("2026-02-28T23:00:00Z", 0.0)]
+    def raw_frame(start, bought, cost, sold_kwh, sold_value):
+        return {"start": start, "end": None, "is_live": False,
+                "metrics": {"meter_values": {"energy_active_import_register": bought,
+                                             "energy_active_export_register": sold_kwh,
+                                             "energy_balance": bought - sold_kwh},
+                            "cost": {"energy_import_cost": cost, "energy_sold_value": sold_value}}}
+
+    class ContractAPI(FakeAPI):
+        async def fetch(self, url, **kw):
+            self.urls.append(url)
+            if "resolution=day" in url:
+                return {"frames": [raw_frame("2026-10-15T22:00:00Z", 28.8, 20.0, 0.0, 0.0) | {"is_live": True}]}
+            return {"frames": [raw_frame(s_, 40.0, 0.0, 5.0, 0.0) for s_, _ in pre]
+                    + [raw_frame("2026-09-30T22:00:00Z", 100.0, 80.0, 10.0, 15.0)]}
+
+    cc = PstrykCostDataUpdateCoordinator(None, ContractAPI([]), 1, 1, entry_id="e")
+    cc.data = await cc._async_update_data()
+    cy = cc.data["yearly"]
+    check("yearly volumes stay as the API reports them (3 x 40 + 100 kWh bought, 3 x 5 + 10 sold)",
+          (cy["fae_usage"], cy["rae_usage"]) == (220.0, 25.0), str((cy["fae_usage"], cy["rae_usage"])))
+    check("yearly billed energy = only the month with cost / revenue",
+          (cy["fae_billed"], cy["rae_billed"]) == (100.0, 10.0), str((cy["fae_billed"], cy["rae_billed"])))
+    avg_c = {(d, p): S.PstrykAverageSellPriceSensor(cc, p, "e", d)
+             for d in ("buy", "sell") for p in ("monthly", "yearly", "total")}
+    check("buy average over the billed month only: 80 / 100 = 0.8 (not 80 / 220)",
+          [avg_c[("buy", p)].native_value for p in ("monthly", "yearly", "total")] == [0.8, 0.8, 0.8],
+          str([avg_c[("buy", p)].native_value for p in ("monthly", "yearly", "total")]))
+    check("sell average over the month with revenue only: 15 / 10 = 1.5 (not 15 / 25)",
+          [avg_c[("sell", p)].native_value for p in ("monthly", "yearly", "total")] == [1.5, 1.5, 1.5],
+          str([avg_c[("sell", p)].native_value for p in ("monthly", "yearly", "total")]))
+    check("total volumes stay literal: bought 220, sold 25",
+          (S.PstrykTotalSellSensor(cc, "energy_bought", "e").native_value,
+           S.PstrykTotalSellSensor(cc, "energy_sold", "e").native_value) == (220.0, 25.0))
+    check("the average's attributes show the billed energy it used",
+          (avg_c[("buy", "yearly")].extra_state_attributes["Energy bought"],
+           avg_c[("buy", "total")].extra_state_attributes["Energy bought"],
+           avg_c[("buy", "total")].extra_state_attributes["2026"]) == (100.0, 100.0, 0.8))
+    daily_cost0 = S.PstrykAverageSellPriceSensor(cc, "daily", "e", "sell")
+    check("daily sell average with no revenue yet: unknown (no kWh with a price), not 0",
+          daily_cost0.native_value is None, str(daily_cost0.native_value))
+    check("daily buy average = cost / billed kWh (20 / 28.8)",
+          S.PstrykAverageSellPriceSensor(cc, "daily", "e", "buy").native_value == round(20.0 / 28.8, 4))
+
+    # period data and history saved before 2.3.0 have no billed energy: unknown, not a stale number
+    saved_old = {k: v for k, v in cc.data["yearly"].items() if k not in ("fae_billed", "rae_billed")}
+    cc.data["yearly"] = saved_old
+    check("yearly average from data saved before 2.3.0: unknown",
+          avg_c[("buy", "yearly")].native_value is None and avg_c[("buy", "total")].native_value is None,
+          f"{avg_c[('buy', 'yearly')].native_value}, {avg_c[('buy', 'total')].native_value}")
+    check("a monthly average is not affected by the old yearly data", avg_c[("buy", "monthly")].native_value == 0.8)
+
     # nothing sold -> no average (no fake 0.00, no division by zero)
-    c.data["monthly"]["rae_usage"] = 0
+    c.data["monthly"]["rae_billed"] = 0
     check("average None when nothing sold", avg["monthly"].native_value is None)
 
     # monetary sensors reset per period, energy sensors use total_increasing

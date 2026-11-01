@@ -24,6 +24,7 @@ Kod polecający Pstryk: **1ML2X7**.
     wartość nieznaną do najbliższego pobrania kosztów o pełnej godzinie :05:30.
   Nazwy w szyku „okres → kierunek → wielkość”, ikony według zasady z 2.2.5 (`mdi:transmission-tower` dla
   bilansu energii).
+- **Średnie ceny liczone tylko z energii rozliczonej przez Pstryk** (koszt/przychód > 0): miesiące sprzed umowy mają odczyty licznika, ale zerowy koszt, i zaniżały średnią (np. 0,05 zł/kWh). Wolumeny zostają dosłowne; dane zapisane przez 2.2.x dają średnią nieznaną do następnego przeliczenia kosztów.
 - **Wszystkie sześć średnich cen znów włączone domyślnie**, tak jak w oryginale. Wersja 2.2.1 wyłączyła cztery
   (`sensor.pstryk_buy_daily_average`, `_buy_monthly_`, `_buy_yearly_`, `sensor.pstryk_sell_daily_average`) pod
   kątem samej sprzedaży; przy zakupie nie ma do tego powodu. **Po aktualizacji** integracja włącza te

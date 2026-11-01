@@ -803,6 +803,34 @@ def test_averages_without_entity_state_come_from_restored_cost(mods, env):
     assert daily.native_value == 2.0
 
 
+def test_fork_averages_use_only_the_energy_pstryk_billed(mods, env):
+    """Months before the contract carry meter readings but no cost: 100 kWh read,
+    only 20 kWh billed for 10 PLN is 0.5 PLN/kWh, not 0.1."""
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
+    restarted.data["monthly"] = {"total_cost": 10.0, "fae_usage": 100.0, "fae_billed": 20.0,
+                                 "total_sold": 6.0, "rae_usage": 50.0, "rae_billed": 10.0}
+    buy = _average(mods, restarted, coords, "monthly")
+    assert buy.native_value == 0.5
+    assert buy.extra_state_attributes["Energy bought"] == 20.0  # the energy the average used
+    sell = mods.sensor.PstrykAveragePriceSensor(restarted, coords["sell"], "monthly", "e")
+    _run(sell.async_added_to_hass())
+    assert sell.native_value == 0.6
+
+
+def test_fork_averages_are_unknown_for_data_saved_before_2_3_0(mods, env):
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
+    restarted.data["monthly"] = {"total_cost": 10.0, "fae_usage": 100.0, "total_sold": 6.0, "rae_usage": 50.0}
+    buy = _average(mods, restarted, coords, "monthly", types.SimpleNamespace(state="0.1", attributes={}))
+    assert buy.native_value is None  # neither the old 0.1 nor 10 / 100 is shown
+
+
+def test_fork_averages_are_unknown_when_nothing_was_billed(mods, env):
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
+    restarted.data["monthly"] = {"total_cost": 0.0, "fae_usage": 100.0, "fae_billed": 0,
+                                 "total_sold": 0.0, "rae_usage": 5.0, "rae_billed": 0}
+    assert _average(mods, restarted, coords, "monthly").native_value is None
+
+
 @pytest.mark.parametrize("now, periods", [
     ((2026, 10, 2, 23, 59), ["daily", "monthly", "yearly"]),
     ((2026, 10, 3, 0, 5), ["monthly", "yearly"]),
