@@ -447,8 +447,13 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             self.last_update_success = True
             _LOGGER.debug("Restored cost data for %s", sorted(restored))
 
-    async def _async_save(self, data):
-        fetched = dt_util.utcnow().isoformat()
+    def fetched_at(self, period):
+        """When `period` was fetched from the API (local time), None if it is not known."""
+        fetched = dt_util.parse_datetime(((self._saved or {}).get(period) or {}).get("fetched") or "")
+        return dt_util.as_local(fetched) if fetched else None
+
+    async def _async_save(self, data, fetched=None):
+        fetched = fetched or dt_util.utcnow().isoformat()
         self._saved["owner"] = self.entry_id
         for period, period_data in data.items():
             self._saved[period] = {"fetched": fetched, "data": period_data}
@@ -524,8 +529,12 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         if data:
             self.data = {**(self.data or {}), **data}
             self.last_update_success = True
+            # Stamped before the listeners run: the averages keep it as "Value from".
+            fetched = dt_util.utcnow().isoformat()
+            for period in data:
+                self._saved.setdefault(period, {})["fetched"] = fetched
             self.async_update_listeners()
-            await self._async_save(data)
+            await self._async_save(data, fetched)
         self._schedule_catch_up()
         outcome = "budget" if not data else ("partial" if self._blocked else "fetched")
         self._note_run(reason, outcome, parts)

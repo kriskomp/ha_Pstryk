@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorDeviceClass
@@ -742,6 +742,42 @@ class PstrykJsonPriceSensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.last_update_success and self.coordinator.data is not None
 
 
+# A weighted average is only known once Pstryk has billed energy in its period. Until
+# a new value can be computed (data saved by an older version, a new day with nothing
+# billed yet, a failed fetch) the last one stays, with the time its data is from, but
+# only within the day, month or year it belongs to: yesterday's daily average is not
+# today's. "total" has no end.
+VALUE_FROM = "Value from"
+_VALUE_FROM_FORMAT = "%d.%m.%Y %H:%M:%S"
+_AVERAGE_AMOUNT_ATTRIBUTES = ("Sell revenue", "Energy sold", "Buy cost", "Energy bought")
+_PERIOD_STAMPS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "yearly": "%Y"}
+
+
+def _value_from_text(moment) -> str | None:
+    """A datetime as the "Value from" attribute (local time); None if there is none."""
+    return dt_util.as_local(moment).strftime(_VALUE_FROM_FORMAT) if isinstance(moment, datetime) else None
+
+
+def _value_still_current(period, value_from, now) -> bool:
+    """True if a kept value stamped `value_from` belongs to the period running at `now`."""
+    if not value_from:
+        return False
+    stamp = _PERIOD_STAMPS.get(period)
+    if stamp is None:
+        return period == "total"
+    try:
+        then = datetime.strptime(value_from, _VALUE_FROM_FORMAT)
+    except (ValueError, TypeError):
+        return False
+    return then.strftime(stamp) == now.strftime(stamp)
+
+
+def _restored_value_from(last_state) -> str | None:
+    """The "Value from" of a restored state; states from before 2.3.0 have none, so the time they were written."""
+    attributes = getattr(last_state, "attributes", None) or {}
+    return attributes.get(VALUE_FROM) or _value_from_text(getattr(last_state, "last_updated", None))
+
+
 class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     # Fork: updated by the cost coordinator's listener only. Home Assistant
@@ -765,6 +801,7 @@ class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
         self._energy_sold = 0.0
         self._total_cost = 0.0
         self._total_revenue = 0.0
+        self._value_from = None
         
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -775,21 +812,27 @@ class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
         
         last_state = await self.async_get_last_state()
         if last_state and last_state.state not in (None, "unknown", "unavailable"):
-            try:
-                self._state = float(last_state.state)
-                
-                if last_state.attributes:
-                    self._energy_bought = float(last_state.attributes.get("energy_bought", 0))
-                    self._energy_sold = float(last_state.attributes.get("energy_sold", 0))
-                    self._total_cost = float(last_state.attributes.get("total_cost", 0))
-                    self._total_revenue = float(last_state.attributes.get("total_revenue", 0))
-                        
-                _LOGGER.debug("Restored weighted average for %s %s: %s", 
-                            self.price_type, self.period, self._state)
-            except (ValueError, TypeError):
-                _LOGGER.warning("Could not restore state for %s", self.name)
+            value_from = _restored_value_from(last_state)
+            # A value of an earlier day/month/year is not this period's average.
+            if _value_still_current(self.period, value_from, dt_util.now()):
+                try:
+                    attributes = last_state.attributes or {}
+                    value = float(last_state.state)
+                    energy_bought = float(attributes.get("Energy bought", attributes.get("energy_bought", 0)))
+                    energy_sold = float(attributes.get("Energy sold", attributes.get("energy_sold", 0)))
+                    total_cost = float(attributes.get("Total cost", attributes.get("total_cost", 0)))
+                    total_revenue = float(attributes.get("Total revenue", attributes.get("total_revenue", 0)))
+                except (ValueError, TypeError):
+                    _LOGGER.warning("Could not restore state for %s", self.name)
+                else:
+                    self._state, self._value_from = value, value_from
+                    self._energy_bought, self._energy_sold = energy_bought, energy_sold
+                    self._total_cost, self._total_revenue = total_cost, total_revenue
+                    _LOGGER.debug("Restored weighted average for %s %s: %s (from %s)",
+                                  self.price_type, self.period, self._state, value_from)
 
-        # Cost data restored at start-up is newer than the entity's own state.
+        # Computed on the side from the cost data (restored at start-up too): a new
+        # value replaces the restored one, none leaves it.
         self._update_from_cost()
 
     @property
@@ -833,6 +876,8 @@ class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
             period_key: self.period,
             calculation_method_key: "Weighted average",
         }
+        if self._state is not None and self._value_from:
+            attrs[VALUE_FROM] = self._value_from
         
         if self.price_type == "buy" and self._energy_bought > 0:
             attrs[energy_bought_key] = round(self._energy_bought, 2)
@@ -864,7 +909,9 @@ class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
 
         # Weighted average over the energy Pstryk billed (see _billed in
         # energy_cost_coordinator.py). Period data saved before 2.3.0 lacks it:
-        # unknown until the next cost run, not a stale or guessed value.
+        # no new value can be computed then (not a guessed one), and the last
+        # value stays, see VALUE_FROM.
+        fresh = False
         if self.price_type == "buy":
             total_cost = abs(period_data.get("total_cost", 0))
             energy_bought = period_data.get("fae_billed")
@@ -873,8 +920,7 @@ class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
                 self._state = round(total_cost / energy_bought, 4)
                 self._energy_bought = energy_bought
                 self._total_cost = total_cost
-            else:
-                self._state = None
+                fresh = True
 
         elif self.price_type == "sell":
             total_revenue = period_data.get("total_sold", 0)
@@ -884,18 +930,31 @@ class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
                 self._state = round(total_revenue / energy_sold, 4)
                 self._energy_sold = energy_sold
                 self._total_revenue = total_revenue
-            else:
-                self._state = None
+                fresh = True
+
+        now = dt_util.now()
+        if fresh:
+            self._value_from = (_value_from_text(self.cost_coordinator.fetched_at(self.period))
+                                or _value_from_text(now))
+        elif not _value_still_current(self.period, self._value_from, now):
+            # Nothing kept for the running period (a new day, month or year with
+            # nothing billed yet).
+            self._state, self._value_from = None, None
+            self._energy_bought = self._energy_sold = 0.0
+            self._total_cost = self._total_revenue = 0.0
 
         return True
 
     @property
     def available(self) -> bool:
+        if self.cost_coordinator is None:
+            return False
         # Its own period only: after midnight a restored month must not make
         # yesterday's daily average look current.
-        return (self.cost_coordinator is not None and
-                self.cost_coordinator.last_update_success and
-                bool(self._period_data()))
+        if self.cost_coordinator.last_update_success and self._period_data():
+            return True
+        # No data of the period (yet): the value kept from before, if still current.
+        return self._state is not None and _value_still_current(self.period, self._value_from, dt_util.now())
 
 
 class PstrykFinancialBalanceSensor(CoordinatorEntity, SensorEntity):
@@ -1319,12 +1378,15 @@ class PstrykTotalSellSensor(SellSideEntity, CoordinatorEntity, SensorEntity):
                 and (self.coordinator.data or {}).get("history") is not None)
 
 
-class PstrykAverageSellPriceSensor(SellSideEntity, CoordinatorEntity, SensorEntity):
+class PstrykAverageSellPriceSensor(SellSideEntity, CoordinatorEntity, RestoreEntity, SensorEntity):
     """Real weighted average price = money / kWh of one direction for a period.
 
     Sell by default (the class name is kept for compatibility); direction "buy"
     gives the purchase counterpart (2.3.0). Only energy of frames Pstryk billed
     something for counts (months before the contract have kWh but no cost).
+
+    The last value is restored at start-up and kept while no new one can be
+    computed (see VALUE_FROM); a new one replaces it.
     """
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1341,31 +1403,32 @@ class PstrykAverageSellPriceSensor(SellSideEntity, CoordinatorEntity, SensorEnti
         self._attr_icon = PRICE_ICONS[direction]
         # entity_id like the original averages: sensor.pstryk_sell_total_average.
         self.entity_id = f"sensor.{DOMAIN}_{direction}_{period}_average"
+        self._value = None
+        self._value_from = None
+        self._kept_attrs = {}
 
-    @property
-    def name(self) -> str:
-        return f"Pstryk {self.period.title()} {self.direction.title()} Price Average"
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in (None, "unknown", "unavailable"):
+            value_from = _restored_value_from(last_state)
+            if _value_still_current(self.period, value_from, dt_util.now()):
+                try:
+                    value = float(last_state.state)
+                except (ValueError, TypeError):
+                    _LOGGER.warning("Could not restore state for %s", self.name)
+                else:
+                    self._value, self._value_from = value, value_from
+                    self._kept_attrs = {
+                        key: attr for key, attr in (last_state.attributes or {}).items()
+                        if key == "Period" or key in _AVERAGE_AMOUNT_ATTRIBUTES or str(key).isdigit()
+                    }
+        self._sync()
 
-    @property
-    def unique_id(self) -> str:
-        return f"{DOMAIN}_{self.direction}_{self.period}_average"
+    def _totals(self):
+        return _flow_totals(self.coordinator, self.period, self.direction, billed=True)
 
-    @property
-    def device_info(self):
-        return _pstryk_device_info(self.hass)
-
-    @property
-    def native_value(self):
-        totals = _flow_totals(self.coordinator, self.period, self.direction, billed=True)
-        if totals is None:
-            return None
-        return _average_price(*totals)
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        totals = _flow_totals(self.coordinator, self.period, self.direction, billed=True)
-        if totals is None:
-            return {}
+    def _attributes_of(self, totals) -> dict:
         money_label, energy_label = (("Sell revenue", "Energy sold") if self.direction == "sell"
                                      else ("Buy cost", "Energy bought"))
         attrs = {
@@ -1381,16 +1444,56 @@ class PstrykAverageSellPriceSensor(SellSideEntity, CoordinatorEntity, SensorEnti
                 avg = _average_price(entry[money_key], entry[energy_key])
                 if avg is not None:
                     attrs[year] = avg
+        return attrs
+
+    def _sync(self) -> None:
+        """A newly computed value replaces the kept one; none leaves it (within its period)."""
+        totals = self._totals()
+        value = _average_price(*totals) if totals is not None else None
+        now = dt_util.now()
+        if value is not None:
+            fetched = self.coordinator.fetched_at("history" if self.period == "total" else self.period)
+            self._value, self._kept_attrs = value, self._attributes_of(totals)
+            self._value_from = _value_from_text(fetched) or _value_from_text(now)
+        elif not _value_still_current(self.period, self._value_from, now):
+            self._value = self._value_from = None
+            self._kept_attrs = {}
+
+    @property
+    def name(self) -> str:
+        return f"Pstryk {self.period.title()} {self.direction.title()} Price Average"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{DOMAIN}_{self.direction}_{self.period}_average"
+
+    @property
+    def device_info(self):
+        return _pstryk_device_info(self.hass)
+
+    @property
+    def native_value(self):
+        self._sync()
+        return self._value
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        self._sync()
+        if self._value is None:
+            return {}
+        attrs = dict(self._kept_attrs)
+        attrs[VALUE_FROM] = self._value_from
         attrs["Last updated"] = dt_util.now().strftime("%d.%m.%Y %H:%M:%S")
         return attrs
 
     @property
     def available(self) -> bool:
-        if not (self.coordinator.last_update_success and self.coordinator.data is not None):
-            return False
-        if self.period == "total":
-            return (self.coordinator.data or {}).get("history") is not None
-        return True
+        self._sync()
+        if self.coordinator.last_update_success and self.coordinator.data is not None:
+            if self.period != "total" or (self.coordinator.data or {}).get("history") is not None:
+                return True
+        # No (complete) data right now: the value kept from before, if still current.
+        return self._value is not None
 
 
 class PstrykTotalBalanceSensor(CoordinatorEntity, SensorEntity):

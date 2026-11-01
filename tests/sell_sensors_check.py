@@ -345,17 +345,23 @@ async def main():
     check("daily buy average = cost / billed kWh (20 / 28.8)",
           S.PstrykAverageSellPriceSensor(cc, "daily", "e", "buy").native_value == round(20.0 / 28.8, 4))
 
-    # period data and history saved before 2.3.0 have no billed energy: unknown, not a stale number
+    # period data saved before 2.3.0 has no billed energy: no new value can be computed. A
+    # sensor that never had one is unknown (not a guessed number); one that has keeps its value.
     saved_old = {k: v for k, v in cc.data["yearly"].items() if k not in ("fae_billed", "rae_billed")}
     cc.data["yearly"] = saved_old
-    check("yearly average from data saved before 2.3.0: unknown",
-          avg_c[("buy", "yearly")].native_value is None and avg_c[("buy", "total")].native_value is None,
-          f"{avg_c[('buy', 'yearly')].native_value}, {avg_c[('buy', 'total')].native_value}")
+    never = S.PstrykAverageSellPriceSensor(cc, "yearly", "e", "buy")
+    check("yearly average from data saved before 2.3.0, never computed: unknown",
+          never.native_value is None and never.extra_state_attributes == {}, str(never.native_value))
+    check("yearly average from data saved before 2.3.0: the last value stays, with its date",
+          avg_c[("buy", "yearly")].native_value == 0.8
+          and "Value from" in avg_c[("buy", "yearly")].extra_state_attributes,
+          f"{avg_c[('buy', 'yearly')].native_value}")
     check("a monthly average is not affected by the old yearly data", avg_c[("buy", "monthly")].native_value == 0.8)
 
     # nothing sold -> no average (no fake 0.00, no division by zero)
     c.data["monthly"]["rae_billed"] = 0
-    check("average None when nothing sold", avg["monthly"].native_value is None)
+    fresh_avg = S.PstrykAverageSellPriceSensor(c, "monthly", "e")
+    check("average None when nothing sold", fresh_avg.native_value is None)
 
     # monetary sensors reset per period, energy sensors use total_increasing
     check("daily sell revenue last_reset = 16.10.2026 00:00",

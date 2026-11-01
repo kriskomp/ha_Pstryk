@@ -35,7 +35,8 @@ Kod polecający Pstryk: **1ML2X7**.
 - **Przejęcie z działającego Pstryk AiO nie sprawdza klucza API osobnym zapytaniem** – AiO właśnie go używa.
   Dzięki temu w pierwszej godzinie mieszczą się ceny, dane dzienne i miesięczne. Klucz AiO, które nie jest
   załadowane (wyłączone, błąd startu), jest sprawdzany jak dotąd.
-- **Średnie ceny liczone tylko z energii rozliczonej przez Pstryk** (koszt/przychód > 0): miesiące sprzed umowy mają odczyty licznika, ale zerowy koszt, i zaniżały średnią (np. 0,05 zł/kWh). Wolumeny zostają dosłowne; dane zapisane przez 2.2.x dają średnią nieznaną do następnego przeliczenia kosztów.
+- **Średnie ceny liczone tylko z energii rozliczonej przez Pstryk** (koszt/przychód > 0): miesiące sprzed umowy mają odczyty licznika, ale zerowy koszt, i zaniżały średnią (np. 0,05 zł/kWh). Wolumeny zostają dosłowne.
+- **Średnie nie tracą ostatniej wartości.** Wszystkie średnie (dzień, miesiąc, rok, `*_total_average`; zakup i sprzedaż) są po restarcie przywracane, nowa wartość liczona obok zastępuje je, gdy da się ją policzyć, a gdy nie (dane zapisane przez 2.2.x bez energii rozliczonej, nowa doba bez rozliczonej godziny) zostaje poprzednia, z atrybutem „Value from” (czas danych). Stara wartość obowiązuje tylko w swoim okresie (dzień, miesiąc, rok); `total` zawsze. Dotąd taka średnia po restarcie była nieznana do następnego pobrania kosztów, nawet gdy miała poprawną wartość z pamięci. Przy okazji przywracane są też atrybuty (dotąd odczytywane pod złymi nazwami). Encje średnich pokazują zapamiętaną wartość także wtedy, gdy kosztów nie udało się jeszcze pobrać (limit API po restarcie).
 - **Wszystkie sześć średnich cen znów włączone domyślnie**, tak jak w oryginale. Wersja 2.2.1 wyłączyła cztery
   (`sensor.pstryk_buy_daily_average`, `_buy_monthly_`, `_buy_yearly_`, `sensor.pstryk_sell_daily_average`) pod
   kątem samej sprzedaży; przy zakupie nie ma do tego powodu. **Po aktualizacji** integracja włącza te
