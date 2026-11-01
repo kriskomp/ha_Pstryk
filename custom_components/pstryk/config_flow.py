@@ -29,7 +29,7 @@ from .const import (
     CONF_PROSUMER_ENTITIES,
     PROSUMER_AUTO,
     PROSUMER_SHOW,
-    PROSUMER_HIDE,
+    PROSUMER_DISABLE,
 )
 
 from .api_client import async_validate_api_key
@@ -293,7 +293,7 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
             vol.Required(CONF_PROSUMER_ENTITIES, default=prosumer_setting(
                 self.config_entry.options.get(CONF_PROSUMER_ENTITIES))): SelectSelector(
                 SelectSelectorConfig(
-                    options=[PROSUMER_AUTO, PROSUMER_SHOW, PROSUMER_HIDE],
+                    options=[PROSUMER_AUTO, PROSUMER_SHOW, PROSUMER_DISABLE],
                     mode=SelectSelectorMode.DROPDOWN,
                     translation_key="prosumer_entities",
                 )),

@@ -104,7 +104,8 @@ mod("homeassistant.helpers.storage", Store=Store)
 mod("homeassistant.helpers.aiohttp_client", async_get_clientsession=lambda h: None)
 mod("homeassistant.helpers.translation", async_get_translations=None)
 mod("homeassistant.helpers.entity_registry",
-    RegistryEntryHider=type("RegistryEntryHider", (), {"USER": "user", "INTEGRATION": "integration"}))
+    RegistryEntryHider=type("RegistryEntryHider", (), {"USER": "user", "INTEGRATION": "integration"}),
+    RegistryEntryDisabler=type("RegistryEntryDisabler", (), {"USER": "user", "INTEGRATION": "integration"}))
 mod("homeassistant.loader", async_get_integration=None)
 mod("aiohttp", ClientError=Exception, ClientSession=object, ClientResponse=object,
     ClientTimeout=object)

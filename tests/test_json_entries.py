@@ -106,7 +106,8 @@ def _stubs():
             "homeassistant.helpers.translation", async_get_translations=None),
         "homeassistant.helpers.entity_registry": _stub(
             "homeassistant.helpers.entity_registry",
-            RegistryEntryHider=types.SimpleNamespace(USER="user", INTEGRATION="integration")),
+            RegistryEntryHider=types.SimpleNamespace(USER="user", INTEGRATION="integration"),
+            RegistryEntryDisabler=types.SimpleNamespace(USER="user", INTEGRATION="integration")),
         "homeassistant.components.sensor": _stub(
             "homeassistant.components.sensor",
             SensorEntity=type("SensorEntity", (), {}),

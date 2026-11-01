@@ -588,6 +588,18 @@ def test_entities_disabled_by_the_integration_are_enabled_but_not_the_users(mods
     assert hass.registry.async_get("sensor.c").disabled_by is Disabler.INTEGRATION  # another entry
 
 
+def test_the_enable_fixup_leaves_the_sell_side_to_the_prosumer_setting(mods):
+    hass, aio, fork = _setup(mods, with_marker=False)
+    sell = ["pstryk_sell_daily_average", "pstryk_sell_revenue_total", "pstryk_energy_sold_yearly"]
+    for n, unique_id in enumerate(sell):
+        hass.registry.add(f"sensor.s{n}", unique_id, "pstryk", "fork1", disabled_by=Disabler.INTEGRATION)
+    hass.registry.add("sensor.buy", "pstryk_buy_daily_average", "pstryk", "fork1", disabled_by=Disabler.INTEGRATION)
+    enabled = _run(mods.migrate.async_enable_integration_disabled(hass, fork))
+    assert enabled == ["sensor.buy"]
+    for n in range(3):
+        assert hass.registry.async_get(f"sensor.s{n}").disabled_by is Disabler.INTEGRATION
+
+
 # --------------------------------------------------------------- config flow
 
 def _config_flow(mods, hass, *, valid=True, current=()):

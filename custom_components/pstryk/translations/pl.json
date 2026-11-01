@@ -88,7 +88,7 @@
         },
         "data_description": {
           "json_sensor_enabled": "Dodaje sensory Pstryk Json Buy/Sell ze standardowymi atrybutami prices_today, prices_tomorrow i prices (kompatybilne z EV Smart Charging, cheapest-energy-hours itp.)",
-          "prosumer_entities": "Dwanaście encji opisuje tylko sprzedaż energii. Ukryte encje nadal zapisują historię, więc ich ponowne pokazanie nie zostawia dziury. Automatycznie: ukryte, dopóki w danych Pstryk nie widać żadnej sprzedaży, po pierwszej sprzedaży pokazane (z powiadomieniem)",
+          "prosumer_entities": "Dwanaście encji opisuje tylko sprzedaż energii. Bez sprzedaży zostają zerowe lub nieznane. Automatycznie: wyłączone, dopóki w danych Pstryk nie widać żadnej sprzedaży; po pierwszej sprzedaży włączane (z powiadomieniem), a Home Assistant dodaje je w ciągu ok. 30 sekund. Wartości biorą się z sum Pstryka, więc niczego potem nie brakuje",
           "take_over_aio": "Otwiera kolejny krok: przeniesienie encji Pstryk AiO do tej integracji (z identyfikatorami, nazwami i historią)"
         }
       },
@@ -164,7 +164,7 @@
     },
     "sale_detected": {
       "title": "Pstryk Energy: wykryto sprzedaż",
-      "description": "Po raz pierwszy widać energię oddaną do sieci, więc encje sprzedaży (przychód, energia sprzedana, średnia cena sprzedaży) są znów widoczne."
+      "description": "Po raz pierwszy widać energię oddaną do sieci, więc encje sprzedaży (przychód, energia sprzedana, średnia cena sprzedaży) są znów włączone. Home Assistant doda je w ciągu ok. 30 sekund."
     },
     "migrated_from_aio_removed": {
       "title": "Pstryk AiO został przejęty i usunięty",
@@ -174,9 +174,9 @@
   "selector": {
     "prosumer_entities": {
       "options": {
-        "auto": "Automatycznie: ukryj, dopóki nic nie sprzedano, pokaż po pierwszej sprzedaży",
-        "show": "Zawsze pokazuj",
-        "hide": "Zawsze ukrywaj"
+        "auto": "Automatycznie: wyłącz, dopóki nic nie sprzedano, włącz po pierwszej sprzedaży",
+        "show": "Zawsze włączone",
+        "disable": "Zawsze wyłączone"
       }
     },
     "aio_mode": {

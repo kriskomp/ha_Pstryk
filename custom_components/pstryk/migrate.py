@@ -20,6 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er, issue_registry as ir
 
 from .const import (
+    SELL_UNIQUE_IDS,
     AIO_ACTION_DISABLE,
     AIO_ACTION_REMOVE,
     AIO_DOMAIN,
@@ -200,12 +201,14 @@ async def async_enable_integration_disabled(hass: HomeAssistant, entry: ConfigEn
     """Switch on entities that 2.2.x disabled by default (four average prices).
 
     Only those disabled by the integration itself; an entity the user disabled
-    is left as the user wanted. Runs before the sensors are added.
+    is left as the user wanted. Runs before the sensors are added. The sell-side
+    entities are left alone: whether they are on is decided by prosumer.py.
     """
     registry = er.async_get(hass)
     enabled = []
     for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if entity.platform == DOMAIN and entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
+        if (entity.platform == DOMAIN and entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+                and entity.unique_id not in SELL_UNIQUE_IDS):
             registry.async_update_entity(entity.entity_id, disabled_by=None)
             enabled.append(entity.entity_id)
     return enabled

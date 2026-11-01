@@ -108,7 +108,7 @@
           "retry_attempts": "Attempts per request, the first one included (1-3). The Pstryk API allows 3 requests per hour in total, so more attempts make no sense and, when the API is down, each one uses up the limit. Recommended: 2",
           "retry_delay": "Wait time between API retry attempts",
           "json_sensor_enabled": "Adds Pstryk Json Buy/Sell sensors with standardized prices_today, prices_tomorrow and prices attributes (compatible with EV Smart Charging, cheapest-energy-hours etc.)",
-          "prosumer_entities": "Twelve entities only describe selling energy. Hidden entities keep recording, so showing them again leaves no gap in their history. Automatic: hidden while no sale has been seen in the Pstryk data, shown (with a notification) on the first sale",
+          "prosumer_entities": "Twelve entities only describe selling energy. Without a sale they stay at zero or unknown. Automatic: disabled while no sale has been seen in the Pstryk data, enabled (with a notification) on the first sale; Home Assistant then adds them within about 30 seconds. Their values come from the Pstryk totals, so nothing is missing afterwards",
           "take_over_aio": "Opens the next step: move the entities of Pstryk AiO to this integration (keeping ids, names and history)"
         }
       },
@@ -184,7 +184,7 @@
     },
     "sale_detected": {
       "title": "Pstryk Energy: sale detected",
-      "description": "Energy sold to the grid was seen for the first time, so the sell entities (revenue, energy sold, average sell price) are shown again."
+      "description": "Energy sold to the grid was seen for the first time, so the sell entities (revenue, energy sold, average sell price) are enabled again. Home Assistant adds them in about 30 seconds."
     },
     "migrated_from_aio_removed": {
       "title": "Pstryk AiO was taken over and removed",
@@ -194,9 +194,9 @@
   "selector": {
     "prosumer_entities": {
       "options": {
-        "auto": "Automatic: hide while nothing has been sold, show after the first sale",
-        "show": "Always show",
-        "hide": "Always hide"
+        "auto": "Automatic: disable while nothing has been sold, enable after the first sale",
+        "show": "Always enabled",
+        "disable": "Always disabled"
       }
     },
     "aio_mode": {

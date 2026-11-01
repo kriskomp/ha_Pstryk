@@ -236,13 +236,13 @@ W opcjach (*Konfiguruj*) i przy pierwszej konfiguracji: **liczba prób** na jedn
 
 ### Encje sprzedaży, gdy nie sprzedajesz energii
 
-12 encji dotyczy wyłącznie sprzedaży (przychód, energia sprzedana i średnia cena sprzedaży: dzień, miesiąc, rok, całość). Bez instalacji PV zostają zerowe lub nieznane, więc opcja **Encje prosumenckie** (*Konfiguruj*) decyduje o ich widoczności:
+12 encji dotyczy wyłącznie sprzedaży (przychód, energia sprzedana i średnia cena sprzedaży: dzień, miesiąc, rok, całość). Bez instalacji PV zostają zerowe lub nieznane, więc opcja **Encje sprzedaży** (*Konfiguruj*) decyduje, czy są włączone:
 
-- **Automatycznie** (domyślnie, także po aktualizacji): encje są **ukryte**, dopóki w danych nie widać żadnej sprzedaży (historia od 10.2024 oraz bieżący dzień, miesiąc i rok). Przy pierwszej sprzedaży są pokazywane i dostajesz jedno powiadomienie. Do czasu pobrania historii nic nie jest ukrywane.
-- **Pokaż**: nigdy nie ukrywa.
-- **Ukryj**: zawsze ukrywa.
+- **Automatycznie** (domyślnie, także po aktualizacji): encje są **wyłączone**, dopóki w danych nie widać żadnej sprzedaży (historia od 10.2024 oraz bieżący dzień, miesiąc i rok). Przy pierwszej sprzedaży integracja je włącza i dostajesz jedno powiadomienie; Home Assistant dodaje je w ciągu ok. 30 sekund (sam przeładowuje wpis po włączeniu encji). Do czasu pobrania historii nic nie jest wyłączane.
+- **Zawsze włączone**: nigdy nie wyłącza.
+- **Zawsze wyłączone**: zawsze wyłącza.
 
-Encje są **ukrywane, nie wyłączane** – nadal zapisują historię, więc pokazanie ich później nie zostawia dziury. Ukryte encje są dostępne w *Ustawienia → Urządzenia i usługi → Encje* (filtr „Pokaż ukryte”). Integracja pokazuje z powrotem tylko to, co sama ukryła: encja ukryta lub pokazana ręcznie nie jest ruszana drugi raz. Bieżąca cena sprzedaży i sensory JSON ze sprzedażą zostają widoczne zawsze. Zmiana ustawienia zaczyna decyzję od nowa.
+Wyłączone, a nie ukryte, bo ukryta encja nadal jest wypisana na stronie urządzenia (z dopiskiem „(ukryto)”). Nic nie ginie: wartości pochodzą z sum Pstryka, więc po włączeniu są poprawne od pierwszego pobrania, bez dziury. Wyłączone encje są w *Ustawienia → Urządzenia i usługi → Encje* (filtr „Pokaż wyłączone”). Integracja włącza z powrotem tylko to, co sama wyłączyła: encja wyłączona lub włączona ręcznie nie jest ruszana drugi raz. Bieżąca cena sprzedaży i sensory JSON ze sprzedażą zostają zawsze. Zmiana ustawienia zaczyna decyzję od nowa. W pierwszej wersji testowej 2.3.0 te encje były ukrywane; teraz są wyłączane, a po aktualizacji ukrycie jest zdejmowane.
 
 ### Diagnostyka
 

@@ -41,13 +41,20 @@ CONF_MQTT_48H_MODE = "mqtt_48h_mode"
 CONF_JSON_SENSOR = "json_sensor_enabled"
 
 # Sell-side entities (revenue, energy sold, sell averages) of someone who does
-# not sell energy are only noise; see prosumer.py. "auto" hides them while no
+# not sell energy are only noise; see prosumer.py. "auto" disables them while no
 # sale has ever been seen and shows them again on the first one.
 CONF_PROSUMER_ENTITIES = "prosumer_entities"
 PROSUMER_AUTO = "auto"
 PROSUMER_SHOW = "show"
-PROSUMER_HIDE = "hide"
+PROSUMER_DISABLE = "disable"
 DEFAULT_PROSUMER_ENTITIES = PROSUMER_AUTO
+# unique_id of the entities that only describe selling (checked against the real
+# sensors by the tests). migrate.py leaves them to prosumer.py.
+SELL_UNIQUE_IDS = tuple(
+    [f"pstryk_sell_revenue_{p}" for p in ("daily", "monthly", "yearly", "total")]
+    + [f"pstryk_energy_sold_{p}" for p in ("daily", "monthly", "yearly", "total")]
+    + [f"pstryk_sell_{p}_average" for p in ("daily", "monthly", "yearly", "total")]
+)
 
 CONF_RETRY_ATTEMPTS = "retry_attempts"
 CONF_RETRY_DELAY = "retry_delay"
@@ -87,4 +94,4 @@ def retry_attempts_setting(value) -> int:
 
 def prosumer_setting(value) -> str:
     """A stored "prosumer_entities" option, or the default if it is missing or unknown."""
-    return value if value in (PROSUMER_AUTO, PROSUMER_SHOW, PROSUMER_HIDE) else DEFAULT_PROSUMER_ENTITIES
+    return value if value in (PROSUMER_AUTO, PROSUMER_SHOW, PROSUMER_DISABLE) else DEFAULT_PROSUMER_ENTITIES

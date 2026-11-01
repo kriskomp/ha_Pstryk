@@ -203,6 +203,7 @@ def _stubs():
         "homeassistant.helpers.entity_registry": _stub(
             "homeassistant.helpers.entity_registry",
             RegistryEntryHider=types.SimpleNamespace(USER="user", INTEGRATION="integration"),
+            RegistryEntryDisabler=types.SimpleNamespace(USER="user", INTEGRATION="integration", CONFIG_ENTRY="config_entry"),
             async_get=lambda hass: hass.registry,
             async_entries_for_config_entry=lambda registry, entry_id: [
                 e for e in registry.entities if e.config_entry_id == entry_id
