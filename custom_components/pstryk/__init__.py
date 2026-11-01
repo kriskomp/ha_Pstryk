@@ -5,10 +5,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.components import persistent_notification
 from homeassistant.helpers.translation import async_get_translations
 
+from .migrate import async_enable_integration_disabled, async_migrate_from_aio
 from .mqtt_publisher import PstrykMqttPublisher
 from .mqtt_common import setup_periodic_mqtt_publish
 from .const import (
     DOMAIN,
+    CONF_AIO_ACTION,
+    CONF_MIGRATE_FROM,
     CONF_MQTT_ENABLED,
     CONF_MQTT_TOPIC_BUY,
     CONF_MQTT_TOPIC_SELL,
@@ -25,8 +28,31 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
     return True
 
+async def _async_take_over_aio(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Finish a take-over chosen in the config flow, before any sensor exists.
+
+    The AiO entities are moved first so that this integration's own sensors
+    find them under their ids instead of creating English duplicates.
+    """
+    aio_id = entry.data.get(CONF_MIGRATE_FROM)
+    if not aio_id:
+        return
+    aio_entry = hass.config_entries.async_get_entry(aio_id)
+    action = entry.data.get(CONF_AIO_ACTION)
+    if aio_entry is None or action is None:
+        _LOGGER.warning("Pstryk AiO take-over skipped: entry %s or its action is missing", aio_id)
+        hass.config_entries.async_update_entry(entry, data={
+            k: v for k, v in entry.data.items() if k not in (CONF_MIGRATE_FROM, CONF_AIO_ACTION)})
+        return
+    await async_migrate_from_aio(hass, entry, aio_entry, action)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].setdefault(entry.entry_id, {})["api_key"] = entry.data.get("api_key")
+
+    # Before the update listener below exists, so clearing the marker reloads nothing.
+    await _async_take_over_aio(hass, entry)
+    await async_enable_integration_disabled(hass, entry)
     
     if not entry.update_listeners:
         entry.async_on_unload(entry.add_update_listener(async_reload_entry))

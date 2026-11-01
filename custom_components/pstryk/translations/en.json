@@ -56,12 +56,24 @@
           "retry_attempts": "Number of times to retry failed API requests",
           "retry_delay": "Wait time between retry attempts"
         }
+      },
+      "migrate": {
+        "title": "Pstryk AiO found",
+        "description": "Pstryk AiO is installed. This integration can take over its API key and its entities, so they keep their entity IDs, names and history and nothing has to be typed in again.\n\nTaken over ({taken_count}): {taken}\n\nRemoved, with no use here (the first hour of tomorrow; all hours of tomorrow are in the attributes of the price sensors): {removed}\n\nAiO entities this integration does not know (left alone; \"remove\" deletes them together with AiO): {other}\n\nAiO is stopped first: both read the same Pstryk API, which allows 3 requests per hour.",
+        "data": {
+          "mode": "What to do",
+          "aio_entry": "Pstryk AiO entry"
+        },
+        "data_description": {
+          "mode": "What happens to the Pstryk AiO entry once its entities have been moved"
+        }
       }
     },
     "error": {
       "invalid_api_key": "Invalid API key",
       "mqtt_not_configured": "MQTT integration not configured or not working. Please configure the MQTT integration in Home Assistant before enabling EVCC MQTT Bridge.",
-      "api_budget_full": "Pstryk allows 3 API requests per hour and this hour's are used. Try again in a few minutes."
+      "api_budget_full": "Pstryk allows 3 API requests per hour and this hour's are used. Try again in a few minutes.",
+      "aio_key_invalid": "The API key of Pstryk AiO is not valid. Choose \"set up as a new integration\" and enter a key."
     }
   },
   "options": {
@@ -80,7 +92,8 @@
           "mqtt_48h_mode": "Enable 48h mode for MQTT",
           "retry_attempts": "API retry attempts",
           "retry_delay": "API retry delay (seconds)",
-          "json_sensor_enabled": "Enable JSON price sensors"
+          "json_sensor_enabled": "Enable JSON price sensors",
+          "take_over_aio": "Take over Pstryk AiO"
         },
         "data_description": {
           "buy_top": "How many cheapest buy prices to highlight (1-24 hours)",
@@ -93,7 +106,8 @@
           "mqtt_48h_mode": "Publish 48 hours of prices (today + tomorrow) instead of just today",
           "retry_attempts": "How many times to retry API requests on failure",
           "retry_delay": "Wait time between API retry attempts",
-          "json_sensor_enabled": "Adds Pstryk Json Buy/Sell sensors with standardized prices_today, prices_tomorrow and prices attributes (compatible with EV Smart Charging, cheapest-energy-hours etc.)"
+          "json_sensor_enabled": "Adds Pstryk Json Buy/Sell sensors with standardized prices_today, prices_tomorrow and prices attributes (compatible with EV Smart Charging, cheapest-energy-hours etc.)",
+          "take_over_aio": "Opens the next step: move the entities of Pstryk AiO to this integration (keeping ids, names and history)"
         }
       },
       "price_settings": {
@@ -139,13 +153,45 @@
           "retry_attempts": "How many times to retry API requests on failure",
           "retry_delay": "Wait time between API retry attempts"
         }
+      },
+      "migrate_aio": {
+        "title": "Take over Pstryk AiO",
+        "description": "Pstryk AiO is installed. This integration can take over its API key and its entities, so they keep their entity IDs, names and history and nothing has to be typed in again.\n\nTaken over ({taken_count}): {taken}\n\nRemoved, with no use here (the first hour of tomorrow; all hours of tomorrow are in the attributes of the price sensors): {removed}\n\nAiO entities this integration does not know (left alone; \"remove\" deletes them together with AiO): {other}\n\nAiO is stopped first: both read the same Pstryk API, which allows 3 requests per hour.",
+        "data": {
+          "mode": "What to do",
+          "aio_entry": "Pstryk AiO entry"
+        },
+        "data_description": {
+          "mode": "What happens to the Pstryk AiO entry once its entities have been moved"
+        }
       }
+    },
+    "error": {
+      "different_api_key": "This integration and Pstryk AiO use different API keys, so they belong to different meters. Nothing was changed.",
+      "aio_gone": "Pstryk AiO was not found any more."
     }
   },
   "issues": {
     "mqtt_not_configured": {
       "title": "Pstryk Energy MQTT Error",
       "description": "MQTT integration is not enabled. EVCC MQTT Bridge for Pstryk Energy cannot function. Please configure MQTT integration in Home Assistant."
+    },
+    "migrated_from_aio_disabled": {
+      "title": "Pstryk AiO was taken over and disabled",
+      "description": "Entities taken over from Pstryk AiO (ids, names and history kept): {taken}\n\nRemoved: {removed}\n\nPstryk AiO is disabled. Do not enable it again: it would create duplicates and use up the API limit. You can remove it in Settings > Devices & services and uninstall it in HACS."
+    },
+    "migrated_from_aio_removed": {
+      "title": "Pstryk AiO was taken over and removed",
+      "description": "Entities taken over from Pstryk AiO (ids, names and history kept): {taken}\n\nRemoved: {removed}\n\nPstryk AiO was removed from Home Assistant. You can uninstall it in HACS."
+    }
+  },
+  "selector": {
+    "aio_mode": {
+      "options": {
+        "disable": "Take over and disable Pstryk AiO (it can be removed later)",
+        "remove": "Take over and remove Pstryk AiO",
+        "fresh": "Do not take over, set up as a new integration"
+      }
     }
   }
 }

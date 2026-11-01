@@ -193,6 +193,12 @@ async def async_setup_entry(
         remaining_entities.append(PstrykTotalSellSensor(cost_coordinator, kind, entry.entry_id))
     # Monthly/yearly: the original sell averages above (same formula).
     remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, "total", entry.entry_id))
+    # Purchase side counterparts (2.3.0): total average buy price, total
+    # financial balance and the kWh energy balance of each period.
+    remaining_entities.append(PstrykAverageSellPriceSensor(cost_coordinator, "total", entry.entry_id, "buy"))
+    remaining_entities.append(PstrykTotalBalanceSensor(cost_coordinator, entry.entry_id))
+    for period in BALANCE_PERIODS:
+        remaining_entities.append(PstrykEnergyBalanceSensor(cost_coordinator, period, entry.entry_id))
 
     _LOGGER.info("Registering %d current price sensors with data and %d additional sensors as unavailable",
                  len(entities), len(remaining_entities))
@@ -209,6 +215,7 @@ async def async_setup_entry(
 # transmission tower and money (PLN) cash; buy points down/in, sell up/out.
 PRICE_ICONS = {"buy": "mdi:tag-arrow-down", "sell": "mdi:tag-arrow-up"}
 BALANCE_ICON = "mdi:scale-balance"
+ENERGY_BALANCE_ICON = "mdi:transmission-tower"
 
 
 class PstrykPriceSensor(CoordinatorEntity, SensorEntity):
@@ -713,11 +720,6 @@ class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
         self.entry_id = entry_id
         self.entity_id = f"sensor.{DOMAIN}_{self.price_type}_{period}_average"
         self._attr_icon = PRICE_ICONS[self.price_type]
-        # Fork: only the sell monthly/yearly averages (the real average sell
-        # price) are enabled by default; the others can be enabled by the user.
-        self._attr_entity_registry_enabled_default = (
-            self.price_type == "sell" and period in ("monthly", "yearly")
-        )
         self._state = None
         self._energy_bought = 0.0
         self._energy_sold = 0.0
@@ -1024,7 +1026,14 @@ FLOW_SENSORS = (
     ("sell_revenue", "yearly"),
     ("energy_sold", "monthly"),
     ("energy_sold", "yearly"),
+    # Purchase side, the counterpart of the sell sensors above (2.3.0).
+    ("buy_cost", "monthly"),
+    ("buy_cost", "yearly"),
+    ("energy_bought", "monthly"),
+    ("energy_bought", "yearly"),
 )
+
+BALANCE_PERIODS = ("daily", "monthly", "yearly")
 
 
 def _pstryk_device_info(hass):
@@ -1105,11 +1114,18 @@ class PstrykFlowSensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.last_update_success and self.coordinator.data is not None
 
 
-def _sell_totals(coordinator, period):
-    """Real (revenue PLN, sold kWh) for a period, straight from Pstryk data.
+# direction -> (money key, energy key) in the period data and in the yearly history
+_FLOW_KEYS = {
+    "sell": {"period": ("total_sold", "rae_usage"), "history": ("sell_revenue", "energy_sold")},
+    "buy": {"period": ("total_cost", "fae_usage"), "history": ("buy_cost", "energy_bought")},
+}
+
+
+def _flow_totals(coordinator, period, direction="sell"):
+    """Real (money PLN, kWh) of one direction for a period, straight from Pstryk data.
 
     daily/monthly/yearly: values the cost coordinator already fetched.
-    total: closed years from the sell history + current year live.
+    total: closed years from the history + current year live.
     Returns None when the needed data is not loaded yet.
     """
     data = coordinator.data or {}
@@ -1117,14 +1133,25 @@ def _sell_totals(coordinator, period):
         period_data = data.get(period)
         if not period_data:
             return None
-        return (period_data.get("total_sold", 0) or 0,
-                period_data.get("rae_usage", 0) or 0)
+        money_key, energy_key = _FLOW_KEYS[direction]["period"]
+        return (abs(period_data.get(money_key, 0) or 0) if direction == "buy"
+                else (period_data.get(money_key, 0) or 0),
+                period_data.get(energy_key, 0) or 0)
 
     per_year = _sell_per_year(coordinator)
     if per_year is None:
         return None
-    return (sum(y["sell_revenue"] for y in per_year.values()),
-            sum(y["energy_sold"] for y in per_year.values()))
+    money_key, energy_key = _FLOW_KEYS[direction]["history"]
+    # History saved before the buy keys existed lacks them until the next cost run.
+    if any(money_key not in y or energy_key not in y for y in per_year.values()):
+        return None
+    return (sum(y[money_key] for y in per_year.values()),
+            sum(y[energy_key] for y in per_year.values()))
+
+
+def _sell_totals(coordinator, period):
+    """Real (revenue PLN, sold kWh) for a period."""
+    return _flow_totals(coordinator, period, "sell")
 
 
 def _sell_per_year(coordinator):
@@ -1233,27 +1260,33 @@ class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
 
 
 class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
-    """Real weighted average sell price = sell revenue / sold kWh for a period."""
+    """Real weighted average price = money / kWh of one direction for a period.
+
+    Sell by default (the class name is kept for compatibility); direction "buy"
+    gives the purchase counterpart (2.3.0).
+    """
 
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "PLN/kWh"
     _attr_suggested_display_precision = 4
-    _attr_icon = PRICE_ICONS["sell"]
 
-    def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, period: str, entry_id: str):
+    def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, period: str, entry_id: str,
+                 direction: str = "sell"):
         super().__init__(coordinator)
         self.period = period
+        self.direction = direction
         self.entry_id = entry_id
+        self._attr_icon = PRICE_ICONS[direction]
         # entity_id like the original averages: sensor.pstryk_sell_total_average.
-        self.entity_id = f"sensor.{DOMAIN}_sell_{period}_average"
+        self.entity_id = f"sensor.{DOMAIN}_{direction}_{period}_average"
 
     @property
     def name(self) -> str:
-        return f"Pstryk {self.period.title()} Sell Price Average"
+        return f"Pstryk {self.period.title()} {self.direction.title()} Price Average"
 
     @property
     def unique_id(self) -> str:
-        return f"{DOMAIN}_sell_{self.period}_average"
+        return f"{DOMAIN}_{self.direction}_{self.period}_average"
 
     @property
     def device_info(self):
@@ -1261,25 +1294,28 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        totals = _sell_totals(self.coordinator, self.period)
+        totals = _flow_totals(self.coordinator, self.period, self.direction)
         if totals is None:
             return None
         return _average_price(*totals)
 
     @property
     def extra_state_attributes(self) -> dict:
-        totals = _sell_totals(self.coordinator, self.period)
+        totals = _flow_totals(self.coordinator, self.period, self.direction)
         if totals is None:
             return {}
+        money_label, energy_label = (("Sell revenue", "Energy sold") if self.direction == "sell"
+                                     else ("Buy cost", "Energy bought"))
         attrs = {
             "Period": self.period,
-            "Sell revenue": round(totals[0], 2),
-            "Energy sold": round(totals[1], 3),
+            money_label: round(totals[0], 2),
+            energy_label: round(totals[1], 3),
         }
         if self.period == "total":
+            money_key, energy_key = _FLOW_KEYS[self.direction]["history"]
             per_year = _sell_per_year(self.coordinator) or {}
             for year, entry in per_year.items():
-                avg = _average_price(entry["sell_revenue"], entry["energy_sold"])
+                avg = _average_price(entry[money_key], entry[energy_key])
                 if avg is not None:
                     attrs[year] = avg
         attrs["Last updated"] = dt_util.now().strftime("%d.%m.%Y %H:%M:%S")
@@ -1292,3 +1328,120 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
         if self.period == "total":
             return (self.coordinator.data or {}).get("history") is not None
         return True
+
+
+class PstrykTotalBalanceSensor(CoordinatorEntity, SensorEntity):
+    """All-time financial balance = total buy cost - total sell revenue.
+
+    The same sign as the daily/monthly/yearly balance: positive is a net cost.
+    """
+
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = "PLN"
+    _attr_suggested_display_precision = 2
+    _attr_icon = BALANCE_ICON
+
+    def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, entry_id: str):
+        super().__init__(coordinator)
+        self.entry_id = entry_id
+        self.entity_id = f"sensor.{DOMAIN}_total_financial_balance"
+
+    @property
+    def name(self) -> str:
+        return "Pstryk Total Financial Balance"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{DOMAIN}_financial_balance_total"
+
+    @property
+    def device_info(self):
+        return _pstryk_device_info(self.hass)
+
+    def _totals(self):
+        buy = _flow_totals(self.coordinator, "total", "buy")
+        sell = _flow_totals(self.coordinator, "total", "sell")
+        return None if buy is None or sell is None else (buy[0], sell[0])
+
+    @property
+    def native_value(self):
+        totals = self._totals()
+        return None if totals is None else round(totals[0] - totals[1], 2)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        totals = self._totals()
+        if totals is None:
+            return {}
+        return {
+            "Period": "total",
+            "Buy cost": round(totals[0], 2),
+            "Sell revenue": round(totals[1], 2),
+            "Last updated": dt_util.now().strftime("%d.%m.%Y %H:%M:%S"),
+        }
+
+    @property
+    def available(self) -> bool:
+        return (self.coordinator.last_update_success
+                and self.coordinator.data is not None
+                and (self.coordinator.data or {}).get("history") is not None)
+
+
+class PstrykEnergyBalanceSensor(CoordinatorEntity, SensorEntity):
+    """Energy balance of a period in kWh = energy bought - energy sold.
+
+    The same as Pstryk's own energy_balance (checked on real API data); negative
+    when more was sold than bought.
+    """
+
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_suggested_display_precision = 2
+    _attr_icon = ENERGY_BALANCE_ICON
+
+    def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, period: str, entry_id: str):
+        super().__init__(coordinator)
+        self.period = period
+        self.entry_id = entry_id
+        self.entity_id = f"sensor.{DOMAIN}_{period}_energy_balance"
+
+    @property
+    def name(self) -> str:
+        return f"Pstryk {self.period.title()} Energy Balance"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{DOMAIN}_energy_balance_{self.period}"
+
+    @property
+    def device_info(self):
+        return _pstryk_device_info(self.hass)
+
+    @property
+    def last_reset(self):
+        return _period_start(self.period)
+
+    @property
+    def native_value(self):
+        period_data = (self.coordinator.data or {}).get(self.period)
+        if not period_data or "fae_usage" not in period_data or "rae_usage" not in period_data:
+            return None
+        return round((period_data["fae_usage"] or 0) - (period_data["rae_usage"] or 0), 3)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        period_data = (self.coordinator.data or {}).get(self.period)
+        if not period_data:
+            return {}
+        return {
+            "Period": self.period,
+            "Energy bought": round(period_data.get("fae_usage", 0) or 0, 3),
+            "Energy sold": round(period_data.get("rae_usage", 0) or 0, 3),
+            "Last updated": dt_util.now().strftime("%d.%m.%Y %H:%M:%S"),
+        }
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success and self.coordinator.data is not None

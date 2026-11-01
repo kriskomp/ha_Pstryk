@@ -1441,24 +1441,23 @@ def test_fork_budget_refusal_is_not_logged_as_a_warning(mods, env, caplog):
     assert any("waits for the API limit" in r.getMessage() for r in cost_records)
 
 
-def test_fork_average_sensors_enabled_by_default_only_for_sell_monthly_yearly(mods, env):
+def test_fork_all_average_sensors_are_enabled_by_default(mods, env):
+    """As in the original: buy and sell, daily, monthly and yearly. 2.2.1 had
+    disabled four of them; 2.3.0 restores the original behaviour."""
     async def scenario():
         client, coords = await env.build()
         cost = _new_cost(mods, env, client, coords)
-        return {
-            mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e").entity_id:
-                mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e")._attr_entity_registry_enabled_default
-            for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")
-        }
+        sensors = [mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e")
+                   for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")]
+        return {s.entity_id: getattr(s, "_attr_entity_registry_enabled_default", True) for s in sensors}
 
-    assert _run(scenario()) == {
-        "sensor.pstryk_buy_daily_average": False,
-        "sensor.pstryk_buy_monthly_average": False,
-        "sensor.pstryk_buy_yearly_average": False,
-        "sensor.pstryk_sell_daily_average": False,
-        "sensor.pstryk_sell_monthly_average": True,
-        "sensor.pstryk_sell_yearly_average": True,
-    }
+    result = _run(scenario())
+    assert len(result) == 6 and all(result.values()), result
+
+
+def test_fork_no_sensor_is_disabled_by_default(mods, env):
+    for sensor in _all_sensors(mods, env):
+        assert getattr(sensor, "_attr_entity_registry_enabled_default", True) is True, sensor.entity_id
 
 
 def test_fork_total_sell_average_ids_like_the_original_averages(mods, env):
@@ -1678,6 +1677,9 @@ def _all_sensors(mods, env):
         sensors += [S.PstrykAveragePriceSensor(cost, coords[t], p, "e")
                     for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")]
         sensors.append(S.PstrykAverageSellPriceSensor(cost, "total", "e"))
+        sensors.append(S.PstrykAverageSellPriceSensor(cost, "total", "e", "buy"))
+        sensors.append(S.PstrykTotalBalanceSensor(cost, "e"))
+        sensors += [S.PstrykEnergyBalanceSensor(cost, p, "e") for p in S.BALANCE_PERIODS]
         sensors += [S.PstrykFlowSensor(cost, m, p, "e") for m, p in S.FLOW_SENSORS]
         sensors += [S.PstrykTotalSellSensor(cost, k, "e") for k in S.PstrykTotalSellSensor.KINDS]
         sensors += [S.PstrykFinancialBalanceSensor(cost, p, "e") for p in ("daily", "monthly", "yearly")]
@@ -1685,6 +1687,17 @@ def _all_sensors(mods, env):
         return sensors
 
     return _run(scenario())
+
+
+def test_fork_setup_registers_every_sensor_class_the_tests_cover(mods, env):
+    """_all_sensors mirrors async_setup_entry by hand; a class registered there
+    but missing from it (or the reverse) would escape the id, name and icon tests."""
+    import inspect
+    import re
+    src = inspect.getsource(mods.sensor.async_setup_entry)
+    registered = set(re.findall(r"\b(Pstryk\w+Sensor)\(", src))
+    covered = {type(s).__name__ for s in _all_sensors(mods, env)}
+    assert registered == covered, registered ^ covered
 
 
 def test_fork_icons_follow_one_scheme(mods, env):
@@ -1697,14 +1710,17 @@ def test_fork_icons_follow_one_scheme(mods, env):
         for p in ("daily", "monthly", "yearly"):
             expected[f"sensor.pstryk_{t}_{p}_average"] = icon
     expected["sensor.pstryk_sell_total_average"] = "mdi:tag-arrow-up"
-    for p in ("daily", "total"):
+    expected["sensor.pstryk_buy_total_average"] = "mdi:tag-arrow-down"
+    for p in ("daily", "monthly", "yearly", "total"):
         expected[f"sensor.pstryk_{p}_energy_bought"] = "mdi:transmission-tower-import"
         expected[f"sensor.pstryk_{p}_buy_cost"] = "mdi:cash-minus"
     for p in ("daily", "monthly", "yearly", "total"):
         expected[f"sensor.pstryk_{p}_energy_sold"] = "mdi:transmission-tower-export"
         expected[f"sensor.pstryk_{p}_sell_revenue"] = "mdi:cash-plus"
-    for p in ("daily", "monthly", "yearly"):
+    for p in ("daily", "monthly", "yearly", "total"):
         expected[f"sensor.pstryk_{p}_financial_balance"] = "mdi:scale-balance"
+    for p in ("daily", "monthly", "yearly"):
+        expected[f"sensor.pstryk_{p}_energy_balance"] = "mdi:transmission-tower"
     assert icons == expected
 
 
@@ -1749,10 +1765,24 @@ RELEASED_IDS = {
     "sensor.pstryk_prices_fetched": "pstryk_prices_fetched",
 }
 
+# Added in 2.3.0 (purchase counterparts and the kWh energy balance). From the
+# release on they must not change either.
+IDS_ADDED_IN_2_3_0 = {
+    "sensor.pstryk_monthly_buy_cost": "pstryk_buy_cost_monthly",
+    "sensor.pstryk_yearly_buy_cost": "pstryk_buy_cost_yearly",
+    "sensor.pstryk_monthly_energy_bought": "pstryk_energy_bought_monthly",
+    "sensor.pstryk_yearly_energy_bought": "pstryk_energy_bought_yearly",
+    "sensor.pstryk_buy_total_average": "pstryk_buy_total_average",
+    "sensor.pstryk_total_financial_balance": "pstryk_financial_balance_total",
+    "sensor.pstryk_daily_energy_balance": "pstryk_energy_balance_daily",
+    "sensor.pstryk_monthly_energy_balance": "pstryk_energy_balance_monthly",
+    "sensor.pstryk_yearly_energy_balance": "pstryk_energy_balance_yearly",
+}
+
 
 def test_fork_entity_and_unique_ids_never_change(mods, env):
     ids = {s.entity_id: s.unique_id for s in _all_sensors(mods, env)}
-    assert ids == RELEASED_IDS
+    assert ids == {**RELEASED_IDS, **IDS_ADDED_IN_2_3_0}
 
 
 def test_fork_names_group_by_period_then_direction(mods, env):
@@ -1766,24 +1796,33 @@ def test_fork_names_group_by_period_then_direction(mods, env):
         "Pstryk Daily Buy Cost",
         "Pstryk Daily Buy Price Average",
         "Pstryk Daily Buy Volume",
+        "Pstryk Daily Energy Balance",
         "Pstryk Daily Financial Balance",
         "Pstryk Daily Sell Price Average",
         "Pstryk Daily Sell Revenue",
         "Pstryk Daily Sell Volume",
         "Pstryk Json Buy",
         "Pstryk Json Sell",
+        "Pstryk Monthly Buy Cost",
         "Pstryk Monthly Buy Price Average",
+        "Pstryk Monthly Buy Volume",
+        "Pstryk Monthly Energy Balance",
         "Pstryk Monthly Financial Balance",
         "Pstryk Monthly Sell Price Average",
         "Pstryk Monthly Sell Revenue",
         "Pstryk Monthly Sell Volume",
         "Pstryk Prices Fetched",
         "Pstryk Total Buy Cost",
+        "Pstryk Total Buy Price Average",
         "Pstryk Total Buy Volume",
+        "Pstryk Total Financial Balance",
         "Pstryk Total Sell Price Average",
         "Pstryk Total Sell Revenue",
         "Pstryk Total Sell Volume",
+        "Pstryk Yearly Buy Cost",
         "Pstryk Yearly Buy Price Average",
+        "Pstryk Yearly Buy Volume",
+        "Pstryk Yearly Energy Balance",
         "Pstryk Yearly Financial Balance",
         "Pstryk Yearly Sell Price Average",
         "Pstryk Yearly Sell Revenue",

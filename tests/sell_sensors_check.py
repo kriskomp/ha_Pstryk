@@ -182,7 +182,11 @@ async def main():
     tot_bought = S.PstrykTotalSellSensor(c, "energy_bought", "e")
     tot_cost = S.PstrykTotalSellSensor(c, "buy_cost", "e")
     avg = {p: S.PstrykAverageSellPriceSensor(c, p, "e") for p in ("monthly", "yearly", "total")}
-    every = [*flow.values(), tot_rev, tot_kwh, tot_bought, tot_cost, *avg.values()]
+    avg_buy_total = S.PstrykAverageSellPriceSensor(c, "total", "e", "buy")
+    tot_balance = S.PstrykTotalBalanceSensor(c, "e")
+    energy_balance = {p: S.PstrykEnergyBalanceSensor(c, p, "e") for p in S.BALANCE_PERIODS}
+    every = [*flow.values(), tot_rev, tot_kwh, tot_bought, tot_cost, *avg.values(),
+             avg_buy_total, tot_balance, *energy_balance.values()]
 
     check("entity ids", sorted(s.entity_id for s in every) == sorted([
         "sensor.pstryk_daily_energy_bought", "sensor.pstryk_daily_energy_sold",
@@ -192,9 +196,14 @@ async def main():
         "sensor.pstryk_total_sell_revenue", "sensor.pstryk_total_energy_sold",
         "sensor.pstryk_total_energy_bought", "sensor.pstryk_total_buy_cost",
         "sensor.pstryk_sell_monthly_average", "sensor.pstryk_sell_yearly_average",
-        "sensor.pstryk_sell_total_average"]))
+        "sensor.pstryk_sell_total_average",
+        "sensor.pstryk_monthly_buy_cost", "sensor.pstryk_yearly_buy_cost",
+        "sensor.pstryk_monthly_energy_bought", "sensor.pstryk_yearly_energy_bought",
+        "sensor.pstryk_buy_total_average", "sensor.pstryk_total_financial_balance",
+        "sensor.pstryk_daily_energy_balance", "sensor.pstryk_monthly_energy_balance",
+        "sensor.pstryk_yearly_energy_balance"]))
     ids = [s.unique_id for s in every]
-    check("15 distinct unique ids", len(set(ids)) == 15, str(ids))
+    check("24 distinct unique ids", len(set(ids)) == 24, str(ids))
     check("total average: ids like the original averages",
           (avg["total"].name, avg["total"].unique_id) == ("Pstryk Total Sell Price Average", "pstryk_sell_total_average"))
     check("total bought/cost: names, units, never reset",
@@ -220,6 +229,58 @@ async def main():
     check("average = revenue / kWh (1.5 PLN/kWh)",
           all(abs(a.native_value - 1.5) < 0.0005 for a in avg.values()),
           str({p: a.native_value for p, a in avg.items()}))
+
+    # purchase side (2.3.0): the counterparts of the sell sensors
+    m, y = c.data["monthly"], c.data["yearly"]
+    check("monthly/yearly buy cost and volume = the period data",
+          (flow["monthly_buy_cost"].native_value, flow["yearly_buy_cost"].native_value,
+           flow["monthly_energy_bought"].native_value, flow["yearly_energy_bought"].native_value)
+          == (round(m["total_cost"], 4), 320.0, round(m["fae_usage"], 4), 400.0)
+          and flow["yearly_buy_cost"].native_value > 0,
+          str((m["total_cost"], m["fae_usage"])))
+    check("buy cost is money (total, resets per period), buy volume is energy (total_increasing)",
+          (flow["monthly_buy_cost"].last_reset == datetime(2026, 10, 1, tzinfo=TZ),
+           flow["yearly_buy_cost"].last_reset == datetime(2026, 1, 1, tzinfo=TZ),
+           flow["monthly_energy_bought"].last_reset, flow["yearly_energy_bought"]._attr_state_class)
+          == (True, True, None, S.SensorStateClass.TOTAL_INCREASING))
+    check("total buy average = total cost / total kWh = 0.8 PLN/kWh",
+          (avg_buy_total.name, avg_buy_total.unique_id, avg_buy_total.native_value)
+          == ("Pstryk Total Buy Price Average", "pstryk_buy_total_average", 0.8),
+          str(avg_buy_total.native_value))
+    check("total buy average attributes: cost, kWh, per-year averages",
+          (avg_buy_total.extra_state_attributes["Buy cost"], avg_buy_total.extra_state_attributes["Energy bought"],
+           avg_buy_total.extra_state_attributes["2026"]) == (800.0, 1000.0, 0.8),
+          str(avg_buy_total.extra_state_attributes))
+    check("total financial balance = total buy cost - total sell revenue (positive = net cost)",
+          (tot_balance.name, tot_balance.unique_id, tot_balance.native_value)
+          == ("Pstryk Total Financial Balance", "pstryk_financial_balance_total", round(800.0 - 438.24, 2)),
+          str(tot_balance.native_value))
+    check("energy balance = bought - sold, per period",
+          (energy_balance["daily"].native_value, energy_balance["monthly"].native_value,
+           energy_balance["yearly"].native_value)
+          == (round(14.86 - 3.2, 3), round(m["fae_usage"] - m["rae_usage"], 3),
+              round(y["fae_usage"] - y["rae_usage"], 3)),
+          str({p: e.native_value for p, e in energy_balance.items()}))
+    check("energy balance: names, ids, unit, negative allowed (total, not total_increasing)",
+          (energy_balance["daily"].name, energy_balance["daily"].unique_id,
+           energy_balance["daily"]._attr_native_unit_of_measurement,
+           energy_balance["daily"]._attr_state_class,
+           energy_balance["daily"].last_reset == datetime(2026, 10, 16, tzinfo=TZ))
+          == ("Pstryk Daily Energy Balance", "pstryk_energy_balance_daily", "kWh",
+              S.SensorStateClass.TOTAL, True))
+    m_rae = m["rae_usage"]
+    m["rae_usage"] = m["fae_usage"] + 5
+    check("energy balance is negative when more was sold than bought",
+          energy_balance["monthly"].native_value == -5.0, str(energy_balance["monthly"].native_value))
+    m["rae_usage"] = m_rae
+    flow_missing = S.PstrykEnergyBalanceSensor(PstrykCostDataUpdateCoordinator(None, FakeAPI([]), 1, 1, entry_id="e"),
+                                               "daily", "e")
+    check("energy balance without data: unknown, not 0", flow_missing.native_value is None)
+
+    cost_before = c.data["monthly"]["total_cost"]
+    c.data["monthly"]["total_cost"] = -cost_before  # a cost reported as a negative number
+    check("buy totals use the cost as a positive number", S._flow_totals(c, "monthly", "buy")[0] == cost_before)
+    c.data["monthly"]["total_cost"] = cost_before
 
     # nothing sold -> no average (no fake 0.00, no division by zero)
     c.data["monthly"]["rae_usage"] = 0
@@ -248,6 +309,12 @@ async def main():
     check("old saved history: buy total unknown (no fake low value), sell total still works",
           old_cost.native_value is None and old_rev.native_value == 438.24,
           f"{old_cost.native_value}, {old_rev.native_value}")
+
+    old_avg = S.PstrykAverageSellPriceSensor(c_old, "total", "e", "buy")
+    old_bal = S.PstrykTotalBalanceSensor(c_old, "e")
+    check("old saved history: total buy average and total balance unknown, not a wrong number",
+          old_avg.native_value is None and old_bal.native_value is None,
+          f"{old_avg.native_value}, {old_bal.native_value}")
 
     # next year: closed 2026 from history, 2027 live
     NOW[0] = datetime(2027, 2, 10, 12, 0, tzinfo=TZ)

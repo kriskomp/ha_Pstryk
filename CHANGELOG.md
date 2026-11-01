@@ -6,6 +6,46 @@ Wersje do 2.1.4 włącznie: [oryginał balgerion/ha_Pstryk](https://github.com/b
 
 Kod polecający Pstryk: **1ML2X7**.
 
+## 2.3.0
+
+- **Zakup na równi ze sprzedażą.** Nowe encje (dane już były w pobieranych odpowiedziach, **bez dodatkowych
+  zapytań do API**):
+  - `sensor.pstryk_monthly_buy_cost`, `sensor.pstryk_yearly_buy_cost` (PLN),
+  - `sensor.pstryk_monthly_energy_bought`, `sensor.pstryk_yearly_energy_bought` (kWh; nazwy „Monthly/Yearly
+    Buy Volume”),
+  - `sensor.pstryk_buy_total_average` – średnia cena kupna od 01.10.2024 (odpowiednik
+    `sensor.pstryk_sell_total_average`),
+  - `sensor.pstryk_total_financial_balance` – bilans od 01.10.2024 (koszt zakupu minus przychód ze sprzedaży,
+    dodatni = koszt netto, jak w bilansie dziennym, miesięcznym i rocznym),
+  - `sensor.pstryk_daily_energy_balance`, `_monthly_`, `_yearly_` – bilans energii w kWh (kupione minus
+    sprzedane; ujemny, gdy sprzedano więcej). To to samo, co pole `energy_balance` w API Pstryka (sprawdzone
+    na danych rozliczeniowych z 29 i 30.10.2026).
+  Nazwy w szyku „okres → kierunek → wielkość”, ikony według zasady z 2.2.5 (`mdi:transmission-tower` dla
+  bilansu energii).
+- **Wszystkie sześć średnich cen znów włączone domyślnie**, tak jak w oryginale. Wersja 2.2.1 wyłączyła cztery
+  (`sensor.pstryk_buy_daily_average`, `_buy_monthly_`, `_buy_yearly_`, `sensor.pstryk_sell_daily_average`) pod
+  kątem samej sprzedaży; przy zakupie nie ma do tego powodu. **Po aktualizacji** integracja włącza te
+  encje, które wyłączyła sama; wyłączone przez Ciebie ręcznie zostają wyłączone.
+- **Kreator przejęcia Pstryk AiO** ([szkocot/Pstryk-all-in-one](https://github.com/szkocot/Pstryk-all-in-one)).
+  AiO i ta integracja czytają to samo API (limit 3 zapytań na godzinę), więc nie mogą działać obok siebie.
+  Kreator przy dodawaniu integracji (albo w *Konfiguruj → Przejmij Pstryk AiO*, jeśli fork jest już dodany):
+  - przejmuje **klucz API z AiO** (sprawdzany jednym zapytaniem) – nic nie trzeba wpisywać,
+  - pokazuje przed zatwierdzeniem, co zrobi, i każe wybrać: przejmij i **wyłącz** AiO, przejmij i **usuń**
+    AiO albo nie przejmuj (zwykła konfiguracja); żadna opcja nie jest ustawiona z góry,
+  - zatrzymuje AiO (inaczej oba czytałyby API naraz) i **przenosi 14 encji** AiO do forka z zachowaniem
+    identyfikatora, nazwy (etykiety), obszaru, historii i statystyk; nazwa i wyłączenie ustawione przez
+    użytkownika zostają,
+  - **usuwa 2 encje bez zastosowania** („Cena zakupu / sprzedaży prądu (jutro)” – to cena tylko pierwszej godziny
+    jutra, a wszystkie godziny są w atrybutach sensorów cen i w sensorach JSON); innych encji AiO nie rusza,
+  - jeśli fork był już dodany obok AiO, usuwa jego angielskie encje o tym samym znaczeniu, a w ich miejsce
+    wstawia starsze z AiO (dłuższa historia); niczego nie zostawia w stanie pośrednim,
+  - nie przejmuje, gdy klucze API różnią się (inny licznik),
+  - zostawia podsumowanie w *Naprawach*.
+  Opis, tabela encji i uwagi: README → „Przejście z Pstryk AiO”.
+- Testy: kreator i przejęcie na atrapach rejestrów Home Assistanta (przeniesienie, nazwy, wyłączenia, konflikt,
+  powtórzenie, oba warianty AiO, przepływ konfiguracji i opcji), nowe sensory, identyfikatory i nazwy. Testy
+  na prawdziwym Home Assistancie nie były uruchamiane w środowisku, w którym powstała zmiana (brak dostępu do PyPI).
+
 ## 2.2.6
 
 - **Nazwy encji w jednym szyku „okres → kierunek → wielkość”.** Home Assistant układa encje urządzenia

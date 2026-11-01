@@ -48,3 +48,11 @@ MIN_RETRY_ATTEMPTS = 1
 MAX_RETRY_ATTEMPTS = 10
 MIN_RETRY_DELAY = 5
 MAX_RETRY_DELAY = 300
+
+# Migration from Pstryk AiO (szkocot/Pstryk-all-in-one), 2.3.0.
+AIO_DOMAIN = "pstryk_aio"
+CONF_MIGRATE_FROM = "migrate_from"  # entry_id of the AiO entry; removed once done
+CONF_AIO_ACTION = "aio_action"
+AIO_ACTION_DISABLE = "disable"
+AIO_ACTION_REMOVE = "remove"
+ISSUE_MIGRATED = "migrated_from_aio"

@@ -56,12 +56,24 @@
           "retry_attempts": "Ile razy ponawiać nieudane żądania API",
           "retry_delay": "Czas oczekiwania między próbami"
         }
+      },
+      "migrate": {
+        "title": "Znaleziono Pstryk AiO",
+        "description": "Pstryk AiO jest zainstalowany. Ta integracja może przejąć jego klucz API i encje, więc zachowają identyfikatory, nazwy i historię, a nic nie trzeba wpisywać od nowa.\n\nPrzejęte ({taken_count}): {taken}\n\nUsunięte, bo nie mają zastosowania (cena pierwszej godziny jutra; wszystkie godziny jutra są w atrybutach sensorów cen): {removed}\n\nEncje AiO nieznane tej integracji (zostają nietknięte; „usuń” kasuje je razem z AiO): {other}\n\nAiO jest zatrzymywane jako pierwsze: obie integracje czytają to samo API Pstryka, które pozwala na 3 zapytania na godzinę.",
+        "data": {
+          "mode": "Co zrobić",
+          "aio_entry": "Wpis Pstryk AiO"
+        },
+        "data_description": {
+          "mode": "Co stanie się z wpisem Pstryk AiO po przeniesieniu jego encji"
+        }
       }
     },
     "error": {
       "invalid_api_key": "Nieprawidłowy klucz API",
       "mqtt_not_configured": "Integracja MQTT nie jest skonfigurowana lub nie działa. Skonfiguruj integrację MQTT w Home Assistant przed włączeniem mostka MQTT dla EVCC.",
-      "api_budget_full": "Pstryk pozwala na 3 zapytania do API na godzinę i w tej godzinie zostały wykorzystane. Spróbuj ponownie za kilka minut."
+      "api_budget_full": "Pstryk pozwala na 3 zapytania do API na godzinę i w tej godzinie zostały wykorzystane. Spróbuj ponownie za kilka minut.",
+      "aio_key_invalid": "Klucz API z Pstryk AiO jest nieprawidłowy. Wybierz „skonfiguruj jako nową integrację” i wpisz klucz."
     }
   },
   "options": {
@@ -70,10 +82,12 @@
         "title": "Opcje Pstryk Energy",
         "description": "Zmodyfikuj konfigurację Pstryk Energy",
         "data": {
-          "json_sensor_enabled": "Włącz sensory JSON z cenami"
+          "json_sensor_enabled": "Włącz sensory JSON z cenami",
+          "take_over_aio": "Przejmij Pstryk AiO"
         },
         "data_description": {
-          "json_sensor_enabled": "Dodaje sensory Pstryk Json Buy/Sell ze standardowymi atrybutami prices_today, prices_tomorrow i prices (kompatybilne z EV Smart Charging, cheapest-energy-hours itp.)"
+          "json_sensor_enabled": "Dodaje sensory Pstryk Json Buy/Sell ze standardowymi atrybutami prices_today, prices_tomorrow i prices (kompatybilne z EV Smart Charging, cheapest-energy-hours itp.)",
+          "take_over_aio": "Otwiera kolejny krok: przeniesienie encji Pstryk AiO do tej integracji (z identyfikatorami, nazwami i historią)"
         }
       },
       "price_settings": {
@@ -119,13 +133,45 @@
           "retry_attempts": "Ile razy ponawiać żądania API w przypadku błędu",
           "retry_delay": "Czas oczekiwania między próbami połączenia z API"
         }
+      },
+      "migrate_aio": {
+        "title": "Przejmij Pstryk AiO",
+        "description": "Pstryk AiO jest zainstalowany. Ta integracja może przejąć jego klucz API i encje, więc zachowają identyfikatory, nazwy i historię, a nic nie trzeba wpisywać od nowa.\n\nPrzejęte ({taken_count}): {taken}\n\nUsunięte, bo nie mają zastosowania (cena pierwszej godziny jutra; wszystkie godziny jutra są w atrybutach sensorów cen): {removed}\n\nEncje AiO nieznane tej integracji (zostają nietknięte; „usuń” kasuje je razem z AiO): {other}\n\nAiO jest zatrzymywane jako pierwsze: obie integracje czytają to samo API Pstryka, które pozwala na 3 zapytania na godzinę.",
+        "data": {
+          "mode": "Co zrobić",
+          "aio_entry": "Wpis Pstryk AiO"
+        },
+        "data_description": {
+          "mode": "Co stanie się z wpisem Pstryk AiO po przeniesieniu jego encji"
+        }
       }
+    },
+    "error": {
+      "different_api_key": "Ta integracja i Pstryk AiO mają różne klucze API, czyli dotyczą różnych liczników. Nic nie zostało zmienione.",
+      "aio_gone": "Nie znaleziono już Pstryk AiO."
     }
   },
   "issues": {
     "mqtt_not_configured": {
       "title": "Pstryk Energy – błąd MQTT",
       "description": "Integracja MQTT nie jest włączona. Mostek MQTT (EVCC) dla Pstryk Energy nie może działać. Skonfiguruj integrację MQTT w Home Assistant."
+    },
+    "migrated_from_aio_disabled": {
+      "title": "Pstryk AiO został przejęty i wyłączony",
+      "description": "Encje przejęte z Pstryk AiO (identyfikatory, nazwy i historia zostały): {taken}\n\nUsunięte: {removed}\n\nPstryk AiO jest wyłączony. Nie włączaj go ponownie: utworzyłby duplikaty i zużywał limit API. Możesz go usunąć w Ustawienia > Urządzenia i usługi oraz odinstalować w HACS."
+    },
+    "migrated_from_aio_removed": {
+      "title": "Pstryk AiO został przejęty i usunięty",
+      "description": "Encje przejęte z Pstryk AiO (identyfikatory, nazwy i historia zostały): {taken}\n\nUsunięte: {removed}\n\nPstryk AiO został usunięty z Home Assistanta. Możesz go odinstalować w HACS."
+    }
+  },
+  "selector": {
+    "aio_mode": {
+      "options": {
+        "disable": "Przejmij i wyłącz Pstryk AiO (można go usunąć później)",
+        "remove": "Przejmij i usuń Pstryk AiO",
+        "fresh": "Nie przejmuj, skonfiguruj jako nową integrację"
+      }
     }
   }
 }
