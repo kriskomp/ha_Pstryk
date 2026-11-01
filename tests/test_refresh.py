@@ -2228,3 +2228,43 @@ def test_equal_price_runs_are_counted_by_instant(mods, env):
     ]
     # by instant the two 3.0 rows are neighbours; sorted as text the 1.0 row comes between them
     assert sensor._count_consecutive_same_values(rows) == 2
+
+
+def test_month_is_refetched_after_a_failed_midnight_run(mods, env):
+    """The 00:05:30 run on the 1st fails: the November periods come from the next hourly run.
+
+    Mnarozny's fork retries the full fetch every hour until one succeeds on the day; here
+    every hourly run fetches all cost parts, so the same holds. This test pins it.
+    """
+    async def scenario():
+        env.hass.session.cost_frames = True
+        _set_clock(2026, 10, 31, 23, 30)
+        client, coords = await env.build()
+        for c in coords.values():
+            c._has_tomorrow = True  # tomorrow's prices are in, so cost may run at 23:30
+        cost = _new_cost(mods, env, client, coords)
+        await cost._handle_hourly_update(None)  # October data
+        assert cost._period_current("monthly", CLOCK[0]) is True
+
+        real = cost._async_update_data
+        calls = []
+
+        async def failing_once(parts=tuple(mods.cost.COST_PARTS)):
+            calls.append(parts)
+            if len(calls) == 1:
+                raise RuntimeError("API 500")
+            return await real(parts)
+
+        cost._async_update_data = failing_once
+        _set_clock(2026, 11, 1, 0, 5, 30)
+        await cost._handle_hourly_update(None)  # midnight run: fails
+        after_failure = (cost.last_run["outcome"], cost._period_current("monthly", CLOCK[0]))
+        _set_clock(2026, 11, 1, 1, 5, 30)
+        await cost._handle_hourly_update(None)  # next hourly run
+        return after_failure, cost._period_current("monthly", CLOCK[0]), cost.last_run["outcome"], len(calls)
+
+    after_failure, current_after_hour, outcome, calls = _run(scenario())
+    assert after_failure[0] == "failed"
+    assert after_failure[1] is False  # November is not current after the failed run
+    assert current_after_hour is True  # the next hourly run covers it
+    assert outcome == "fetched" and calls == 2
