@@ -327,6 +327,8 @@ Nagłówek karty pokazuje aktualną cenę (stan sensora, odświeżany co godzin�
 
 Przykładowa Automatyzacja:
 
+> **Format `start` od 2.3.1.** W atrybutach `All prices`, `Best prices` i `Worst prices` pole `start` ma czas lokalny z przesunięciem UTC, np. `2026-10-25T02:00:00+02:00` (do 2.3.0 bez przesunięcia). Dzięki temu dwie godziny 02:00 w dniu cofnięcia zegara (25 godzin w dobie) mają różny `start`. Automacje porównujące `start` z `now().replace(minute=0, second=0, microsecond=0).isoformat(timespec='seconds')` działają bez zmian, ale jeśli miały dopisane `.split('+')[0]`, trzeba to usunąć. Sensory JSON (`time`) miały przesunięcie od początku.
+
 Włączanie bojlera
 ![IMG_4079](https://github.com/user-attachments/assets/ccdfd05c-3b38-4af5-a8db-36fe7fd645ee)
 
@@ -341,7 +343,7 @@ conditions:
   - condition: template
     value_template: >
       {% set current_hour = now().replace(minute=0, second=0,
-      microsecond=0).isoformat(timespec='seconds').split('+')[0] %}
+      microsecond=0).isoformat(timespec='seconds') %}
 
       {% set best_hours = state_attr('sensor.pstryk_current_buy_price',
       'Best prices') | map(attribute='start') | list %}
@@ -351,7 +353,7 @@ actions:
   - variables:
       current_hour: >-
         {{ now().replace(minute=0, second=0,
-        microsecond=0).isoformat(timespec='seconds').split('+')[0] }}
+        microsecond=0).isoformat(timespec='seconds') }}
   - choose:
       - conditions:
           - condition: state

@@ -36,7 +36,7 @@ dt = mod(
     "homeassistant.util.dt",
     now=lambda: NOW[0],
     utcnow=lambda: NOW[0].astimezone(timezone.utc),
-    as_utc=lambda d: d.astimezone(timezone.utc),
+    as_utc=lambda d: (d if d.tzinfo else d.replace(tzinfo=TZ)).astimezone(timezone.utc),  # naive = default zone, as in HA
     as_local=lambda d: d.astimezone(TZ),
     parse_datetime=parse_datetime,
 )

@@ -63,7 +63,7 @@ def _stubs():
         "homeassistant.util.dt",
         now=lambda: CLOCK[0],
         utcnow=lambda: CLOCK[0].astimezone(timezone.utc),
-        as_utc=lambda d: d.astimezone(timezone.utc),
+        as_utc=lambda d: (d if d.tzinfo else d.replace(tzinfo=TZ)).astimezone(timezone.utc),  # naive = default zone, as in HA
         as_local=_as_local,
         parse_datetime=_parse_datetime,
         DEFAULT_TIME_ZONE=TZ,

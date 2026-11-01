@@ -143,10 +143,11 @@ def _stubs():
         "homeassistant.util.dt",
         now=lambda: CLOCK[0],
         utcnow=lambda: CLOCK[0].astimezone(timezone.utc),
-        as_utc=lambda d: d.astimezone(timezone.utc),
+        as_utc=lambda d: (d if d.tzinfo else d.replace(tzinfo=TZ)).astimezone(timezone.utc),  # naive = default zone, as in HA
         as_local=_as_local,
         parse_datetime=_parse_datetime,
         DEFAULT_TIME_ZONE=TZ,
+        start_of_local_day=lambda d: datetime.combine(d, datetime.min.time(), tzinfo=TZ),
     )
     aiohttp = _stub("aiohttp")
     aiohttp.__getattr__ = lambda name: type(name, (Exception,), {})
@@ -1940,3 +1941,290 @@ def test_fork_names_group_by_period_then_direction(mods, env):
         "Pstryk Yearly Sell Revenue",
         "Pstryk Yearly Sell Volume",
     ]
+
+
+# --- Clock changes (issue #11): Europe/Warsaw goes back on 2026-10-25 (25-hour day,
+# two 02:00 hours) and forward on 2027-03-28 (23-hour day, no 02:00). ---
+
+def _frames(first_utc, hours, price=lambda i: 1.0 + i):
+    return {"frames": [
+        {
+            "start": (first_utc + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": (first_utc + timedelta(hours=i + 1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "price_gross": price(i),
+            "price_prosumer_gross": price(i),
+            "metrics": {"pricing": {"price_gross": price(i), "price_prosumer_gross": price(i),
+                                    "tge_price": 0.5, "is_cheap": False, "is_expensive": False}},
+        }
+        for i in range(hours)
+    ]}
+
+
+AUTUMN = _frames(datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc), 49)  # 25.10 00:00 CEST + 2 days
+SPRING = _frames(datetime(2027, 3, 27, 23, 0, tzinfo=timezone.utc), 47)  # 28.03 00:00 CET + 2 days
+
+
+def _utc(*args):
+    CLOCK[0] = datetime(*args, tzinfo=timezone.utc).astimezone(TZ)
+
+
+def _sensor(mods, coord, kind="next"):
+    sensor = object.__new__(mods.sensor.PstrykPriceSensor)
+    sensor.coordinator, sensor.price_type = coord, getattr(coord, "price_type", "buy")
+    return sensor
+
+
+def test_start_carries_its_utc_offset_and_the_repeated_hour_is_kept(mods, env):
+    async def scenario():
+        env.hass.session.pricing = AUTUMN
+        _utc(2026, 10, 24, 22, 30)
+        client, coords = await env.build()
+        await coords["buy"].async_request_refresh()
+        return coords["buy"].data
+
+    data = _run(scenario())
+    today = data["prices_today"]
+    assert len(today) == 25
+    assert [p["start"] for p in today][2:5] == [
+        "2026-10-25T02:00:00+02:00", "2026-10-25T02:00:00+01:00", "2026-10-25T03:00:00+01:00"]
+    assert len({mods.uc.entry_start(p) for p in today}) == 25  # 25 different instants
+
+
+def test_current_and_next_price_in_both_passes_of_0200(mods, env):
+    async def scenario():
+        env.hass.session.pricing = AUTUMN
+        _utc(2026, 10, 24, 22, 30)
+        client, coords = await env.build()
+        await coords["buy"].async_request_refresh()
+        sensor = _sensor(mods, coords["buy"])
+        seen = {}
+        for label, moment in {
+            "01:30 CEST": (2026, 10, 24, 23, 30),
+            "02:30 CEST": (2026, 10, 25, 0, 30),
+            "02:30 CET": (2026, 10, 25, 1, 30),
+            "03:30 CET": (2026, 10, 25, 2, 30),
+        }.items():
+            _utc(*moment)
+            seen[label] = (sensor._get_current_price(), sensor._get_next_hour_price())
+        return seen
+
+    seen = _run(scenario())
+    # prices are 1.0 + frame index: 01:00 CEST = 1st frame after 23:00Z -> index 1
+    assert seen == {
+        "01:30 CEST": (2.0, 3.0),   # next is the 1st 02:00
+        "02:30 CEST": (3.0, 4.0),   # next is the 2nd 02:00, not "03:00"
+        "02:30 CET": (4.0, 5.0),
+        "03:30 CET": (5.0, 6.0),
+    }
+
+
+def test_next_hour_exists_across_the_spring_change(mods, env):
+    async def scenario():
+        env.hass.session.pricing = SPRING
+        _utc(2027, 3, 27, 23, 30)
+        client, coords = await env.build()
+        await coords["buy"].async_request_refresh()
+        sensor = _sensor(mods, coords["buy"])
+        out = {}
+        for label, moment in {"01:30 CET": (2027, 3, 28, 0, 30), "03:30 CEST": (2027, 3, 28, 1, 30)}.items():
+            _utc(*moment)
+            out[label] = (sensor._get_current_price(), sensor._get_next_hour_price())
+        return out, len(coords["buy"].data["prices_today"])
+
+    out, today = _run(scenario())
+    assert today == 23
+    assert out == {"01:30 CET": (2.0, 3.0), "03:30 CEST": (3.0, 4.0)}  # next of 01:30 is 03:00 CEST
+
+
+def _old_cache(frames):
+    """Cache as 2.3.0 wrote it: local `start` without offset, in API order."""
+    rows = []
+    for f in frames:
+        start = datetime.fromisoformat(f["start"].replace("Z", "+00:00")).astimezone(TZ)
+        rows.append({"start": start.strftime("%Y-%m-%dT%H:%M:%S"), "price": f["price_gross"], "tge_price": 0.5})
+    return rows
+
+
+def test_old_cache_gets_offsets_and_keeps_both_0200_rows(mods, env):
+    rows = _old_cache(AUTUMN["frames"])
+    out = mods.uc.with_offsets({"prices": rows, "owner": "e"})["prices"]
+    assert len(out) == 49
+    assert [p["start"] for p in out][2:4] == ["2026-10-25T02:00:00+02:00", "2026-10-25T02:00:00+01:00"]
+    assert len({mods.uc.entry_start(p) for p in out}) == 49
+    assert [mods.uc.entry_start(p) for p in out] == sorted(mods.uc.entry_start(p) for p in out)
+
+
+def test_old_cache_drops_a_lone_ambiguous_row_and_keeps_the_rest(mods, env):
+    rows = [r for r in _old_cache(AUTUMN["frames"]) if r["start"] != "2026-10-25T02:00:00"]
+    rows.insert(2, {"start": "2026-10-25T02:00:00", "price": 9.0, "tge_price": 0.5})  # one row only
+    out = mods.uc.with_offsets({"prices": rows})["prices"]
+    assert len(out) == 47
+    assert all(not p["start"].startswith("2026-10-25T02:00:00") for p in out)
+
+
+def test_cache_with_offsets_and_summer_only_cache_are_unchanged(mods, env):
+    new = {"prices": [{"start": "2026-10-25T02:00:00+01:00", "price": 1.0}]}
+    assert mods.uc.with_offsets(new) is new
+    summer = {"prices": [{"start": "2026-10-02T13:00:00", "price": 1.0}]}
+    assert mods.uc.with_offsets(summer)["prices"][0]["start"] == "2026-10-02T13:00:00+02:00"
+
+
+def test_restart_with_an_old_cache_on_the_clock_change_day_needs_no_request(mods, env):
+    async def scenario():
+        env.hass.session.pricing = AUTUMN
+        _utc(2026, 10, 24, 22, 30)
+        client, coords = await env.build()
+        await coords["sell"].async_request_refresh()
+        CACHE["sell"] = {**CACHE["sell"], "prices": _old_cache(AUTUMN["frames"]), "owner": "e",
+                         "prices_today": []}
+        env.hass.data["pstryk"].clear()
+        sent = len(env.hass.session.sent)
+        _utc(2026, 10, 25, 1, 10)  # 02:10 CET, the second pass
+        client, coords = await env.build()
+        loaded = await coords["sell"].async_load_startup_cache()
+        sensor = _sensor(mods, coords["sell"])
+        return loaded, len(env.hass.session.sent) - sent, sensor._get_current_price(), len(coords["sell"].data["prices_today"])
+
+    loaded, requests, current, today = _run(scenario())
+    assert requests == 0 and today == 25
+    assert current == 4.0  # the second 02:00, not the first
+    assert loaded is True
+
+
+def test_cache_without_the_current_hour_is_refetched_at_startup(mods, env):
+    async def scenario():
+        env.hass.session.pricing = AUTUMN
+        _utc(2026, 10, 24, 22, 30)
+        client, coords = await env.build()
+        await coords["sell"].async_request_refresh()
+        # keep only the first pass of 02:00, drop the second
+        CACHE["sell"]["prices"] = [p for p in CACHE["sell"]["prices"] if not p["start"].endswith("02:00:00+01:00")]
+        env.hass.data["pstryk"].clear()
+        _utc(2026, 10, 25, 1, 10)
+        client, coords = await env.build()
+        return await coords["sell"].async_load_startup_cache()
+
+    assert _run(scenario()) is False  # current hour (2nd 02:00) missing -> fetch
+
+
+def test_remaining_prices_count_the_repeated_hour(mods, env):
+    from types import SimpleNamespace
+    prices = _old_cache(AUTUMN["frames"])
+    data = mods.uc.with_offsets({"prices": prices})["prices"]
+    today = [p for p in data if p["start"].startswith("2026-10-25")]
+    now = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc).astimezone(TZ)  # 02:30 CET
+    begin = mods.uc.entry_start
+    cur = mods.uc.dt_util.as_utc(now).replace(minute=0, second=0, microsecond=0)
+    assert sum(1 for p in today if begin(p) >= cur) == 22  # 02 (2nd) .. 23 -> 22 hours
+
+
+def test_covers_tells_the_two_passes_apart():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pp", PKG / "price_policy.py")
+    pp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pp)
+    first = datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc).astimezone(TZ)
+    second = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc).astimezone(TZ)
+    assert pp.covers("2026-10-25T02:00:00+02:00", first) and not pp.covers("2026-10-25T02:00:00+02:00", second)
+    assert pp.covers("2026-10-25T02:00:00+01:00", second) and not pp.covers("2026-10-25T02:00:00+01:00", first)
+    assert pp.covers("2026-10-25T02:00:00", first) and pp.covers("2026-10-25T02:00:00", second)  # old format: by hour
+    assert not pp.covers("garbage", first)
+
+
+def test_json_sensor_and_attributes_agree_on_the_clock_change_day(mods, env):
+    async def scenario():
+        env.hass.session.pricing = AUTUMN
+        _utc(2026, 10, 24, 22, 30)
+        client, coords = await env.build()
+        await coords["buy"].async_request_refresh()
+        data = coords["buy"].data
+        sensor = object.__new__(mods.sensor.PstrykJsonPriceSensor)
+        sensor.coordinator, sensor.price_type = coords["buy"], "buy"
+        _utc(2026, 10, 25, 1, 30)  # 02:30 CET
+        return data, sensor.native_value, sensor.extra_state_attributes["prices_today"]
+
+    data, value, json_today = _run(scenario())
+    assert value == 4.0
+    assert len(json_today) == 25
+    # the offsets in `start` and in the JSON `time` name the same instants
+    assert [mods.uc.entry_start(p) for p in data["prices_today"]] == [e["time"].astimezone(timezone.utc) for e in json_today]
+
+
+def _mqtt(mods, coord):
+    import importlib
+    module = importlib.import_module("pstryk.mqtt_publisher")
+    env_hass = coord.hass
+    env_hass.data["pstryk"]["e_mqtt_48h_mode"] = False
+    return module.PstrykMqttPublisher(env_hass, "e")
+
+
+def test_mqtt_publishes_25_ordered_hours_on_the_clock_back_day(mods, env, caplog):
+    async def scenario():
+        env.hass.session.pricing = AUTUMN
+        _utc(2026, 10, 24, 22, 30)
+        client, coords = await env.build()
+        await coords["buy"].async_request_refresh()
+        _utc(2026, 10, 25, 1, 30)
+        return _mqtt(mods, coords["buy"])._format_prices_for_evcc(coords["buy"].data, "buy")
+
+    with caplog.at_level("WARNING"):
+        out = _run(scenario())
+    assert len(out) == 25
+    assert [p["start"] for p in out][2:5] == ["2026-10-25T00:00:00Z", "2026-10-25T01:00:00Z", "2026-10-25T02:00:00Z"]
+    assert [p["start"] for p in out] == sorted(p["start"] for p in out)
+    assert "Incomplete day" not in caplog.text  # 25 hours were expected
+
+
+def test_mqtt_expects_23_hours_on_the_clock_forward_day(mods, env, caplog):
+    async def scenario():
+        env.hass.session.pricing = SPRING
+        _utc(2027, 3, 27, 23, 30)
+        client, coords = await env.build()
+        await coords["buy"].async_request_refresh()
+        return _mqtt(mods, coords["buy"])._format_prices_for_evcc(coords["buy"].data, "buy")
+
+    with caplog.at_level("WARNING"):
+        out = _run(scenario())
+    assert len(out) == 23
+    assert "Incomplete day" not in caplog.text
+
+
+def _attributes_at(mods, env, moment):
+    async def scenario():
+        env.hass.session.pricing = AUTUMN
+        _utc(2026, 10, 24, 22, 30)
+        client, coords = await env.build()
+        await coords["buy"].async_request_refresh()
+        sensor = _sensor(mods, coords["buy"])
+        sensor.hass = types.SimpleNamespace(states=types.SimpleNamespace(get=lambda entity: None))
+        sensor.top_count = sensor.worst_count = 3
+        sensor._last_data_hash = sensor._cached_sorted_prices = None
+        _utc(*moment)
+        return sensor.extra_state_attributes
+
+    return _run(scenario())
+
+
+def test_remaining_hours_count_the_repeated_hour(mods, env):
+    second = _attributes_at(mods, env, (2026, 10, 25, 1, 30))  # 02:30 CET, second pass
+    assert any(k.endswith("/22") for k in second), list(second)  # 02 (2nd) ... 23
+    first = _attributes_at(mods, env, (2026, 10, 25, 0, 30))  # 02:30 CEST, first pass
+    assert any(k.endswith("/23") for k in first), list(first)
+
+
+def test_best_and_worst_prices_keep_their_offset(mods, env):
+    attrs = _attributes_at(mods, env, (2026, 10, 25, 1, 30))
+    starts = [p["start"] for key, rows in attrs.items() if isinstance(rows, list) for p in rows if isinstance(p, dict) and "start" in p]
+    assert starts and all(s[-6:] in ("+01:00", "+02:00") for s in starts)
+
+
+def test_equal_price_runs_are_counted_by_instant(mods, env):
+    sensor = _sensor(mods, None)
+    rows = [
+        {"start": "2026-10-25T01:00:00+02:00", "price": 2.0},
+        {"start": "2026-10-25T02:00:00+02:00", "price": 1.0},
+        {"start": "2026-10-25T02:00:00+01:00", "price": 3.0},
+        {"start": "2026-10-25T03:00:00+01:00", "price": 3.0},
+    ]
+    # by instant the two 3.0 rows are neighbours; sorted as text the 1.0 row comes between them
+    assert sensor._count_consecutive_same_values(rows) == 2
