@@ -40,11 +40,58 @@ CONF_MQTT_TOPIC_SELL = "mqtt_topic_sell"
 CONF_MQTT_48H_MODE = "mqtt_48h_mode"
 CONF_JSON_SENSOR = "json_sensor_enabled"
 
+# Sell-side entities (revenue, energy sold, sell averages) of someone who does
+# not sell energy are only noise; see prosumer.py. "auto" disables them while no
+# sale has ever been seen and shows them again on the first one.
+CONF_PROSUMER_ENTITIES = "prosumer_entities"
+PROSUMER_AUTO = "auto"
+PROSUMER_SHOW = "show"
+PROSUMER_DISABLE = "disable"
+DEFAULT_PROSUMER_ENTITIES = PROSUMER_AUTO
+# unique_id of the entities that only describe selling (checked against the real
+# sensors by the tests). migrate.py leaves them to prosumer.py.
+SELL_UNIQUE_IDS = tuple(
+    [f"pstryk_sell_revenue_{p}" for p in ("daily", "monthly", "yearly", "total")]
+    + [f"pstryk_energy_sold_{p}" for p in ("daily", "monthly", "yearly", "total")]
+    + [f"pstryk_sell_{p}_average" for p in ("daily", "monthly", "yearly", "total")]
+)
+
 CONF_RETRY_ATTEMPTS = "retry_attempts"
 CONF_RETRY_DELAY = "retry_delay"
-DEFAULT_RETRY_ATTEMPTS = 5
+# Attempts per request, the first one included. Every attempt is one of the
+# API_HOURLY_LIMIT requests an hour that prices and costs share, so more than
+# that can never be sent, and a failing API would spend the whole hour on
+# retries. Two (one retry) leaves a slot for the next job.
+DEFAULT_RETRY_ATTEMPTS = 2
 DEFAULT_RETRY_DELAY = 30
 MIN_RETRY_ATTEMPTS = 1
-MAX_RETRY_ATTEMPTS = 10
+MAX_RETRY_ATTEMPTS = API_HOURLY_LIMIT
 MIN_RETRY_DELAY = 5
 MAX_RETRY_DELAY = 300
+
+# Migration from Pstryk AiO (szkocot/Pstryk-all-in-one), 2.3.0.
+AIO_DOMAIN = "pstryk_aio"
+CONF_MIGRATE_FROM = "migrate_from"  # entry_id of the AiO entry; removed once done
+CONF_AIO_ACTION = "aio_action"
+AIO_ACTION_DISABLE = "disable"
+AIO_ACTION_REMOVE = "remove"
+ISSUE_MIGRATED = "migrated_from_aio"
+
+
+def retry_attempts_setting(value) -> int:
+    """The attempts to use for a stored setting.
+
+    Up to 2.2.x the limit of the setting was 10 and the default 5, but only
+    API_HOURLY_LIMIT requests an hour can be sent, so a stored larger value is
+    used as the largest meaningful one (the extra attempts only waited for a
+    slot that could not come). Anything unusable gives the default.
+    """
+    try:
+        return max(MIN_RETRY_ATTEMPTS, min(MAX_RETRY_ATTEMPTS, int(value)))
+    except (TypeError, ValueError):
+        return DEFAULT_RETRY_ATTEMPTS
+
+
+def prosumer_setting(value) -> str:
+    """A stored "prosumer_entities" option, or the default if it is missing or unknown."""
+    return value if value in (PROSUMER_AUTO, PROSUMER_SHOW, PROSUMER_DISABLE) else DEFAULT_PROSUMER_ENTITIES

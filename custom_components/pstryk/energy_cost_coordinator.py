@@ -29,9 +29,12 @@ COST_DATA_STORE_VERSION = 1
 # A saved period is restored only within the day, month or year it was fetched in.
 PERIOD_FORMATS = {"daily": "%Y-%m-%d", "monthly": "%Y-%m", "yearly": "%Y", "history": "%Y"}
 
-# The two cost requests and the periods each one feeds. "month" goes first: it
-# feeds three periods and every total sensor, so it gets a lone free slot.
-COST_PARTS = {"month": ("monthly", "yearly", "history"), "day": ("daily",)}
+# The two cost requests and the periods each one feeds, in fetch order. Day
+# first (2.3.0; "month" went first before): when the hourly limit leaves room for only one
+# request (right after installation, after a restart, at the 11-12 h price
+# reserve), today's sensors get it; the month request (monthly, yearly and the
+# all-time history) follows on the next free slot.
+COST_PARTS = {"day": ("daily",), "month": ("monthly", "yearly", "history")}
 # A catch-up waits this long after the slot it needs frees: longer than a
 # waiting price fetch (slot + 5 s), so prices get the slot first.
 CATCH_UP_MARGIN = timedelta(seconds=10)
@@ -48,6 +51,28 @@ def restorable_periods(saved, now):
         if fetched and dt_util.as_local(fetched).strftime(fmt) == now.strftime(fmt):
             restored[period] = entry["data"]
     return restored
+
+
+def _billed(frame):
+    """(bought kWh, sold kWh) of a frame, counted only where Pstryk billed something.
+
+    Months before the contract come back with their meter readings but no cost
+    (or revenue). Weighted averages use only the energy that has a price, so
+    those months do not pull them down; the volumes stay as the API reports them.
+    """
+    bought = (frame.get("fae_usage", 0) or 0) if abs(frame.get("fae_cost", 0) or 0) > 0 else 0
+    sold = (frame.get("rae", 0) or 0) if (frame.get("energy_sold_value", 0) or 0) > 0 else 0
+    return bought, sold
+
+
+def _local_day(start):
+    """Local calendar day (YYYY-MM-DD) of a frame's `start`, for log messages only.
+
+    Pstryk sends the start in UTC, so the frame of 1 November (Warsaw) starts on
+    "2026-10-31T23:00:00Z"; matching below compares the start strings themselves.
+    """
+    parsed = dt_util.parse_datetime(start or "")
+    return dt_util.as_local(parsed).strftime("%Y-%m-%d") if parsed else (start or "").split("T")[0]
 
 
 class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
@@ -69,6 +94,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         # for up to an hour after every restart.
         self._store = Store(hass, COST_DATA_STORE_VERSION, f"{DOMAIN}_cost_data")
         self._saved = {}
+        # What the last cost run did, for the diagnostics (see _note_run).
+        self.last_run = None
+        self._catch_up_at = None
 
         if retry_attempts is None:
             retry_attempts = DEFAULT_RETRY_ATTEMPTS
@@ -84,7 +112,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             name=f"{DOMAIN}_cost",
         )
 
-    async def _async_update_data(self, parts=("month", "day")):
+    async def _async_update_data(self, parts=tuple(COST_PARTS)):
         """Fetch the given cost parts. A part the budget refuses is recorded in
         self._blocked (normal, not an error); BudgetExhausted is raised only when
         every part was refused and nothing was fetched."""
@@ -124,7 +152,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     _LOGGER.warning("Failed to fetch cost data (%s): %s", part, e)
                 return None
 
-            for part in ("month", "day"):
+            for part in COST_PARTS:
                 if part not in parts:
                     continue
                 if part == "month":
@@ -223,16 +251,20 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 continue
             year = str(dt_util.as_local(parsed).year)
             entry = years.setdefault(year, {"sell_revenue": 0.0, "energy_sold": 0.0,
-                                            "buy_cost": 0.0, "energy_bought": 0.0})
+                                            "buy_cost": 0.0, "energy_bought": 0.0,
+                                            "energy_bought_billed": 0.0, "energy_sold_billed": 0.0})
             entry["sell_revenue"] += frame.get("energy_sold_value", 0) or 0
             entry["energy_sold"] += frame.get("rae", 0) or 0
             # Same sum as the yearly total_cost / fae_usage of the current year.
             entry["buy_cost"] += abs(frame.get("fae_cost", 0) or 0)
             entry["energy_bought"] += frame.get("fae_usage", 0) or 0
+            bought_billed, sold_billed = _billed(frame)
+            entry["energy_bought_billed"] += bought_billed
+            entry["energy_sold_billed"] += sold_billed
         for entry in years.values():
             for key in ("sell_revenue", "buy_cost"):
                 entry[key] = round(entry[key], 2)
-            for key in ("energy_sold", "energy_bought"):
+            for key in ("energy_sold", "energy_bought", "energy_bought_billed", "energy_sold_billed"):
                 entry[key] = round(entry[key], 3)
         _LOGGER.info("Sell history loaded: %s", years)
         return {"years": dict(sorted(years.items())),
@@ -247,7 +279,10 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_sold": 0,
             "total_cost": 0,
             "fae_usage": 0,
-            "rae_usage": 0
+            "rae_usage": 0,
+            "energy_balance": 0,
+            "fae_billed": 0,
+            "rae_billed": 0
         }
 
         frames = self._normalized_frames(response)
@@ -270,6 +305,8 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             result["total_cost"] = abs(frame.get("fae_cost", 0))
             result["fae_usage"] = frame.get("fae_usage", 0)
             result["rae_usage"] = frame.get("rae", 0)
+            result["energy_balance"] = frame.get("energy_balance", 0)
+            result["fae_billed"], result["rae_billed"] = _billed(frame)
             _LOGGER.info(f"Monthly data from frame {frame.get('start')}: balance={result['total_balance']}, "
                         f"sold={result['total_sold']}, cost={result['total_cost']}, "
                         f"fae={result['fae_usage']}, rae={result['rae_usage']}")
@@ -285,7 +322,10 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_sold": 0,
             "total_cost": 0,
             "fae_usage": 0,
-            "rae_usage": 0
+            "rae_usage": 0,
+            "energy_balance": 0,
+            "fae_billed": 0,
+            "rae_billed": 0
         }
 
         live_date = None
@@ -304,22 +344,23 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 if frame.get("is_live", False):
                     result["fae_usage"] = frame.get("fae_usage", 0)
                     result["rae_usage"] = frame.get("rae", 0)
+                    result["energy_balance"] = frame.get("energy_balance", 0)
                     _LOGGER.info(f"*** FOUND LIVE FRAME: fae_usage={result['fae_usage']}, rae={result['rae_usage']} ***")
 
                     live_start = frame.get("start")
                     if live_start:
                         live_date = live_start.split("T")[0]
-                        _LOGGER.info(f"Live frame date: {live_date}")
+                        _LOGGER.info(f"Live frame day: {_local_day(live_start)} (frame start {live_start})")
                     break
 
         if live_date:
-            _LOGGER.info(f"Looking for matching frame date: {live_date}")
+            _LOGGER.info(f"Looking for the cost frame of the live frame (start day {live_date} UTC)")
 
             for frame in frames:
                 frame_start = frame.get("start", "")
                 frame_date = frame_start.split("T")[0] if frame_start else ""
 
-                _LOGGER.info(f"Checking cost frame: start={frame_start}, date={frame_date}, "
+                _LOGGER.info(f"Checking cost frame: start={frame_start}, day={_local_day(frame_start)}, "
                            f"balance={frame.get('energy_balance_value', 0)}, "
                            f"cost={frame.get('fae_cost', 0)}")
 
@@ -328,11 +369,12 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                     result["total_balance"] = frame.get("energy_balance_value", 0)
                     result["total_sold"] = frame.get("energy_sold_value", 0)
                     result["total_cost"] = abs(frame.get("fae_cost", 0))
-                    _LOGGER.info(f"*** MATCHED cost frame for date {live_date}: balance={result['total_balance']}, "
+                    result["fae_billed"], result["rae_billed"] = _billed(frame)
+                    _LOGGER.info(f"*** MATCHED cost frame for day {_local_day(frame_start)}: balance={result['total_balance']}, "
                                f"cost={result['total_cost']}, sold={result['total_sold']} ***")
                     break
             else:
-                _LOGGER.warning(f"No unified metrics frame found matching live date {live_date}")
+                _LOGGER.warning(f"No unified metrics frame found matching the live frame (start day {live_date} UTC)")
         elif not live_date:
             _LOGGER.warning("No live frame found in unified metrics data, cannot match daily frame")
 
@@ -351,6 +393,9 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         total_cost = 0
         fae_usage = 0
         rae_usage = 0
+        energy_balance = 0
+        fae_billed = 0
+        rae_billed = 0
 
         frames = self._normalized_frames(response)
 
@@ -366,6 +411,10 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             for frame in frames:
                 fae_usage += frame.get("fae_usage", 0)
                 rae_usage += frame.get("rae", 0)
+                energy_balance += frame.get("energy_balance", 0)
+                bought_billed, sold_billed = _billed(frame)
+                fae_billed += bought_billed
+                rae_billed += sold_billed
             _LOGGER.info(f"Yearly usage totals: fae={fae_usage}, rae={rae_usage}")
 
         return {
@@ -374,7 +423,10 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             "total_sold": total_sold,
             "total_cost": total_cost,
             "fae_usage": fae_usage,
-            "rae_usage": rae_usage
+            "rae_usage": rae_usage,
+            "energy_balance": energy_balance,
+            "fae_billed": fae_billed,
+            "rae_billed": rae_billed
         }
 
     async def async_restore(self):
@@ -395,8 +447,13 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             self.last_update_success = True
             _LOGGER.debug("Restored cost data for %s", sorted(restored))
 
-    async def _async_save(self, data):
-        fetched = dt_util.utcnow().isoformat()
+    def fetched_at(self, period):
+        """When `period` was fetched from the API (local time), None if it is not known."""
+        fetched = dt_util.parse_datetime(((self._saved or {}).get(period) or {}).get("fetched") or "")
+        return dt_util.as_local(fetched) if fetched else None
+
+    async def _async_save(self, data, fetched=None):
+        fetched = fetched or dt_util.utcnow().isoformat()
         self._saved["owner"] = self.entry_id
         for period, period_data in data.items():
             self._saved[period] = {"fetched": fetched, "data": period_data}
@@ -437,6 +494,20 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         return [part for part, periods in COST_PARTS.items()
                 if not all(self._period_current(p, now) for p in periods)]
 
+    def _note_run(self, reason, outcome, parts=()):
+        """Remember the latest cost run (or the reason there was none) for diagnostics."""
+        self.last_run = {
+            "at": dt_util.utcnow(),
+            "reason": reason,
+            "outcome": outcome,
+            "parts": list(parts),
+            "waiting": dict(self._blocked),
+        }
+
+    def catch_up_time(self):
+        """When the one-off catch-up of missing cost parts is booked, else None."""
+        return self._catch_up_at if self._unsub_catch_up else None
+
     async def _async_run(self, parts, keep_free, reason) -> str:
         """One cost fetch of `parts`; then a catch-up for parts still missing."""
         if self.api_client.closed:
@@ -452,17 +523,22 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Cost update (%s) failed: %s - next try at :05:30", reason, err)
             if not self.data:
                 self.last_update_success = False  # nothing to show; data kept otherwise
+            self._note_run(reason, "failed", parts)
             self._schedule_catch_up()
             return "failed"
         if data:
             self.data = {**(self.data or {}), **data}
             self.last_update_success = True
+            # Stamped before the listeners run: the averages keep it as "Value from".
+            fetched = dt_util.utcnow().isoformat()
+            for period in data:
+                self._saved.setdefault(period, {})["fetched"] = fetched
             self.async_update_listeners()
-            await self._async_save(data)
+            await self._async_save(data, fetched)
         self._schedule_catch_up()
-        if not data:
-            return "budget"
-        return "partial" if self._blocked else "fetched"
+        outcome = "budget" if not data else ("partial" if self._blocked else "fetched")
+        self._note_run(reason, outcome, parts)
+        return outcome
 
     def async_shutdown_timers(self):
         """Cancel the hourly run and a pending catch-up (entry unload/reload)."""
@@ -495,6 +571,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         # A regular run before it reschedules or cancels it (see _async_run).
         _LOGGER.info("Cost data (%s) will be fetched at %s, when the API limit frees",
                      ", ".join(waiting), dt_util.as_local(run_at).strftime("%H:%M:%S"))
+        self._catch_up_at = run_at
         self._unsub_catch_up = async_track_point_in_time(
             self.hass, self._handle_catch_up, dt_util.as_utc(run_at)
         )
@@ -527,15 +604,18 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         missing = self.missing_parts(now)
         if not missing:
             _LOGGER.debug("Cost data restored for every period; next update at :05:30")
+            self._note_run("start-up", "restored")
             return "restored"
         if not startup_cost_fetch_due(now, missing):
             _LOGGER.debug("Cost data missing (%s); the :05:30 update is close", missing)
+            self._note_run("start-up", "next_run_soon", missing)
             return "next_run_soon"
         tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
         keep_free = cost_keep_free(now, tomorrow)
         if not self.api_client.budget_room_soon(keep_free=keep_free):
             self._block_all_until_free(keep_free)
             self._schedule_catch_up()
+            self._note_run("start-up", "budget", missing)
             return "budget"
         _LOGGER.info("Cost data missing (%s); fetching now (start-up)", ", ".join(missing))
         return await self._async_run(missing, keep_free, "start-up")
@@ -545,6 +625,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
         tomorrow = all(c._has_tomorrow for c in self.price_coordinators)
         if not cost_run_allowed(local_now, tomorrow):
             _LOGGER.debug("Skipping cost update at %s: prices first", local_now.strftime("%H:%M"))
+            self._note_run("hourly", "skipped")
             self.schedule_hourly_update()
             return
         keep_free = cost_keep_free(local_now, tomorrow)
@@ -553,6 +634,7 @@ class PstrykCostDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("Cost update at %s waits for the API limit", local_now.strftime("%H:%M"))
                 self._block_all_until_free(keep_free)
                 self._schedule_catch_up()
+                self._note_run("hourly", "waits", tuple(COST_PARTS))
                 return
             _LOGGER.debug("Triggering cost update")
             await self._async_run(tuple(COST_PARTS), keep_free, "hourly")

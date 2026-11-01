@@ -29,7 +29,7 @@ HACS_KEYS = {
     "render_readme", "zip_release",
 }
 # Top-level translation sections hassfest accepts for this integration
-TRANSLATION_SECTIONS = {"title", "config", "options", "issues", "exceptions", "entity", "services"}
+TRANSLATION_SECTIONS = {"title", "config", "options", "issues", "exceptions", "entity", "services", "selector"}
 
 
 def _changelog_section():

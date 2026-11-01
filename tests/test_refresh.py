@@ -57,12 +57,15 @@ def _parse_datetime(value):
 class _Coordinator:
     def __init__(self, hass, logger, name=None, **kwargs):
         self.hass, self.name, self.data, self.last_update_success = hass, name, None, True
+        self.listeners = []
 
     def async_update_listeners(self):
-        pass
+        for listener in list(self.listeners):
+            listener()
 
     def async_add_listener(self, listener):
-        return lambda: None
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener) if listener in self.listeners else None
 
     def async_set_updated_data(self, data):
         self.data, self.last_update_success = data, True
@@ -124,6 +127,17 @@ def _stub(name, **attrs):
     return module
 
 
+async def _noop(self):
+    pass
+
+
+TRANSLATIONS = {}  # what async_get_translations returns (the notification texts)
+
+
+async def _translations(hass, language, category, integrations):
+    return dict(TRANSLATIONS)
+
+
 def _stubs():
     dt = _stub(
         "homeassistant.util.dt",
@@ -154,7 +168,10 @@ def _stubs():
             "homeassistant.helpers.update_coordinator",
             DataUpdateCoordinator=_Coordinator,
             UpdateFailed=type("UpdateFailed", (Exception,), {}),
-            CoordinatorEntity=type("CoordinatorEntity", (), {"__init__": lambda self, c: None}),
+            CoordinatorEntity=type("CoordinatorEntity", (), {
+                "__init__": lambda self, c: None,
+                "async_added_to_hass": _noop,
+            }),
         ),
         "homeassistant.helpers.event": _stub("homeassistant.helpers.event", async_track_point_in_time=_track),
         "homeassistant.helpers.storage": _stub("homeassistant.helpers.storage", Store=_Store),
@@ -181,6 +198,17 @@ def _stubs():
             SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement", TOTAL="total", TOTAL_INCREASING="total_increasing"),
             SensorDeviceClass=types.SimpleNamespace(MONETARY="monetary", TIMESTAMP="timestamp", ENERGY="energy"),
         ),
+        "homeassistant.helpers.translation": _stub(
+            "homeassistant.helpers.translation", async_get_translations=_translations),
+        "homeassistant.helpers.entity_registry": _stub(
+            "homeassistant.helpers.entity_registry",
+            RegistryEntryHider=types.SimpleNamespace(USER="user", INTEGRATION="integration"),
+            RegistryEntryDisabler=types.SimpleNamespace(USER="user", INTEGRATION="integration", CONFIG_ENTRY="config_entry"),
+            async_get=lambda hass: hass.registry,
+            async_entries_for_config_entry=lambda registry, entry_id: [
+                e for e in registry.entities if e.config_entry_id == entry_id
+            ],
+        ),
         "homeassistant.loader": _stub("homeassistant.loader", async_get_integration=None),
         "aiohttp": aiohttp,
         "pstryk": package,
@@ -201,6 +229,8 @@ def mods():
             poll=importlib.import_module("pstryk.tomorrow_poll"),
             sensor=importlib.import_module("pstryk.sensor"),
             button=importlib.import_module("pstryk.button"),
+            diagnostics=importlib.import_module("pstryk.diagnostics"),
+            prosumer=importlib.import_module("pstryk.prosumer"),
         )
     finally:
         for name in [n for n in sys.modules if n == "pstryk" or n.startswith("pstryk.")]:
@@ -728,11 +758,11 @@ def _new_cost(mods, env, client, coords, entry_id="e"):
 
 
 async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
-    """Full run at 13:50 on Oct 2, daily only at 14:50, then a restart at `restart_at`.
+    """Full run at 13:50 on Oct 2, one request only at 14:50 (daily), then a restart at `restart_at`.
 
-    Cost frames carry their request number: 12:05 prices is 1, 13:50 monthly 2 and
-    daily 3 (fork: the month request goes first), the other call at 14:30 is 4,
-    14:50 monthly 5.
+    Cost frames carry their request number: 12:05 prices is 1, 13:50 daily 2 and
+    monthly 3 (fork 2.3.0: the day request goes first), the other call at 14:30 is 4,
+    14:50 daily 5.
     """
     env.hass.session.cost_frames = True
     # Fork: keep one slot as the original policy did, so the 14:50 run is partial.
@@ -764,12 +794,12 @@ async def _cost_runs_then_restart(mods, env, restart_at, entry_id="e"):
 def test_cost_data_survives_a_restart_without_a_request(mods, env):
     full, sent, restarted, _ = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
     assert sorted(full) == ["daily", "history", "monthly", "yearly"]
-    assert full["monthly"]["total_balance"] == 2
-    assert sent == 5  # the daily call at 14:50 was refused
+    assert full["monthly"]["total_balance"] == 3
+    assert sent == 5  # the month call at 14:50 was refused
     assert len(env.hass.session.sent) == sent  # restoring sent nothing
     assert restarted.last_update_success is True
-    assert restarted.data["monthly"]["total_balance"] == 5  # from 14:50
-    assert restarted.data["daily"] == full["daily"]  # from 13:50, kept through the partial run
+    assert restarted.data["daily"]["total_balance"] == 5  # from 14:50: the day goes first
+    assert restarted.data["monthly"] == full["monthly"]  # from 13:50, kept through the partial run
 
 
 def test_cost_data_of_another_entry_is_not_restored(mods, env):
@@ -780,6 +810,7 @@ def test_cost_data_of_another_entry_is_not_restored(mods, env):
 
 def _average(mods, cost, coords, period, last_state=None):
     sensor = mods.sensor.PstrykAveragePriceSensor(cost, coords["buy"], period, "e")
+    sensor.hass = cost.hass  # set by Home Assistant before async_added_to_hass
     sensor.last_state = last_state
     _run(sensor.async_added_to_hass())
     return sensor
@@ -801,6 +832,85 @@ def test_averages_without_entity_state_come_from_restored_cost(mods, env):
     daily = _average(mods, restarted, coords, "daily")
     assert daily.available is True
     assert daily.native_value == 2.0
+
+
+def test_daily_log_names_the_local_day_not_the_utc_start(mods, env, caplog):
+    """The frame of 1 November starts on 31 October 23:00 UTC; the log said
+    "Live frame date: 2026-10-31", which read like yesterday's data."""
+    import logging
+
+    async def scenario():
+        _at(1, 14, 29)
+        client, coords = await env.build()
+        cost = _new_cost(mods, env, client, coords)
+        frames = [
+            {"start": "2026-10-30T23:00:00Z", "fae_usage": 0.1, "rae": 0, "fae_cost": 0.0},
+            {"start": "2026-10-31T23:00:00Z", "is_live": True, "fae_usage": 29.9, "rae": 0,
+             "fae_cost": 21.45, "energy_balance_value": 21.45},
+        ]
+        with caplog.at_level(logging.INFO, logger="pstryk"):
+            return cost._process_daily_data_simple({"frames": frames})
+
+    # Warsaw is on winter time on 1 November 2026 (UTC+1).
+    result = _run(scenario())
+    assert result["total_cost"] == 21.45 and result["fae_billed"] == 29.9  # matching unchanged
+    messages = [r.getMessage() for r in caplog.records]
+    live = [m for m in messages if m.startswith("Live frame day")]
+    assert live and "2026-11-01" in live[0] and "2026-10-31T23:00:00Z" in live[0]
+    matched = [m for m in messages if "MATCHED cost frame" in m]
+    assert matched and "for day 2026-11-01" in matched[0]
+    assert not [m for m in messages if "Live frame date" in m]
+
+
+def test_setup_clamps_a_stored_retry_setting_to_the_api_limit(mods):
+    """The coordinators get the attempts through retry_attempts_setting: a 5
+    stored by 2.2.x would otherwise wait for slots that cannot exist."""
+    import inspect
+    src = inspect.getsource(mods.sensor.async_setup_entry)
+    assert "retry_attempts_setting(entry.options.get(CONF_RETRY_ATTEMPTS" in src
+    assert src.count("retry_attempts") >= 3  # read once, handed to every coordinator
+
+
+def test_every_sensor_is_pushed_never_polled(mods):
+    """No sensor relies on Home Assistant's 30 s polling: each one is updated by
+    its coordinator. A polled sensor with a "Last updated" attribute would write
+    a new state row every 30 s (the six averages did, up to 2.3.0)."""
+    import inspect
+    classes = [c for _, c in inspect.getmembers(mods.sensor, inspect.isclass)
+               if c.__module__ == mods.sensor.__name__ and issubclass(c, mods.sensor.SensorEntity)]
+    assert mods.sensor.PstrykAveragePriceSensor in classes
+    for cls in classes:
+        pushed = issubclass(cls, mods.sensor.CoordinatorEntity) or cls.__dict__.get("_attr_should_poll") is False
+        assert pushed, cls.__name__
+
+
+def test_fork_averages_use_only_the_energy_pstryk_billed(mods, env):
+    """Months before the contract carry meter readings but no cost: 100 kWh read,
+    only 20 kWh billed for 10 PLN is 0.5 PLN/kWh, not 0.1."""
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
+    restarted.data["monthly"] = {"total_cost": 10.0, "fae_usage": 100.0, "fae_billed": 20.0,
+                                 "total_sold": 6.0, "rae_usage": 50.0, "rae_billed": 10.0}
+    buy = _average(mods, restarted, coords, "monthly")
+    assert buy.native_value == 0.5
+    assert buy.extra_state_attributes["Energy bought"] == 20.0  # the energy the average used
+    sell = mods.sensor.PstrykAveragePriceSensor(restarted, coords["sell"], "monthly", "e")
+    sell.hass = restarted.hass
+    _run(sell.async_added_to_hass())
+    assert sell.native_value == 0.6
+
+
+def test_fork_averages_are_unknown_for_data_saved_before_2_3_0(mods, env):
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
+    restarted.data["monthly"] = {"total_cost": 10.0, "fae_usage": 100.0, "total_sold": 6.0, "rae_usage": 50.0}
+    buy = _average(mods, restarted, coords, "monthly", types.SimpleNamespace(state="0.1", attributes={}))
+    assert buy.native_value is None  # neither the old 0.1 nor 10 / 100 is shown
+
+
+def test_fork_averages_are_unknown_when_nothing_was_billed(mods, env):
+    _, _, restarted, coords = _run(_cost_runs_then_restart(mods, env, (2026, 10, 2, 15, 0)))
+    restarted.data["monthly"] = {"total_cost": 0.0, "fae_usage": 100.0, "fae_billed": 0,
+                                 "total_sold": 0.0, "rae_usage": 5.0, "rae_billed": 0}
+    assert _average(mods, restarted, coords, "monthly").native_value is None
 
 
 @pytest.mark.parametrize("now, periods", [
@@ -1359,8 +1469,9 @@ def test_fork_start_just_before_the_hourly_run_waits_for_it(mods, env):
 def test_fork_restart_with_little_budget_catches_up_and_returns_to_the_rhythm(mods, env):
     """First install 16:09:38 (prices), another request 16:20, restart with v2.2.0 at 16:38.
 
-    One slot is left at 16:38: the month request gets it (monthly, yearly, totals),
-    the day request waits. It is caught up as soon as a slot frees, not at 18:05:30.
+    One slot is left at 16:38: the day request gets it (fork 2.3.0: today's sensors
+    first), the month request (monthly, yearly, totals) waits. It is caught up as
+    soon as a slot frees, not at 18:05:30.
     """
     env.hass.session.cost_frames = True
 
@@ -1395,12 +1506,12 @@ def test_fork_restart_with_little_budget_catches_up_and_returns_to_the_rhythm(mo
 
     result, after_start, catch_up, (after, at), runs, cost = _run(scenario())
     assert result == "partial"
-    assert after_start == ["history", "monthly", "yearly"]  # month first: totals at once
+    assert after_start == ["daily"]  # day first: today's sensors at once
     # The slot of 16:09:38 frees at 17:09:40 (1 h + 2 s margin, as in the log); catch-up
     # 10 s later, after a price fetch waiting for the same slot (slot + 5 s).
     assert catch_up[0].astimezone(TZ) == datetime(2026, 10, 2, 17, 9, 50, tzinfo=TZ)
     assert after == ["daily", "history", "monthly", "yearly"]
-    assert at < datetime(2026, 10, 2, 17, 10, tzinfo=TZ)  # daily by 17:10, not 18:05:30
+    assert at < datetime(2026, 10, 2, 17, 10, tzinfo=TZ)  # month by 17:10, not 18:05:30
     assert runs == [2, 2]  # back in the :05:30 rhythm
     assert cost.last_update_success is True
     assert env.hass.session.max_in_any_hour() <= 3
@@ -1420,6 +1531,7 @@ def test_fork_no_catch_up_when_every_period_is_current(mods, env):
 
 def test_fork_budget_refusal_is_not_logged_as_a_warning(mods, env, caplog):
     import logging
+    env.hass.session.cost_frames = True  # the day request goes first and is answered
 
     async def scenario():
         _at(2, 16, 9, 38)
@@ -1441,24 +1553,23 @@ def test_fork_budget_refusal_is_not_logged_as_a_warning(mods, env, caplog):
     assert any("waits for the API limit" in r.getMessage() for r in cost_records)
 
 
-def test_fork_average_sensors_enabled_by_default_only_for_sell_monthly_yearly(mods, env):
+def test_fork_all_average_sensors_are_enabled_by_default(mods, env):
+    """As in the original: buy and sell, daily, monthly and yearly. 2.2.1 had
+    disabled four of them; 2.3.0 restores the original behaviour."""
     async def scenario():
         client, coords = await env.build()
         cost = _new_cost(mods, env, client, coords)
-        return {
-            mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e").entity_id:
-                mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e")._attr_entity_registry_enabled_default
-            for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")
-        }
+        sensors = [mods.sensor.PstrykAveragePriceSensor(cost, coords[t], p, "e")
+                   for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")]
+        return {s.entity_id: getattr(s, "_attr_entity_registry_enabled_default", True) for s in sensors}
 
-    assert _run(scenario()) == {
-        "sensor.pstryk_buy_daily_average": False,
-        "sensor.pstryk_buy_monthly_average": False,
-        "sensor.pstryk_buy_yearly_average": False,
-        "sensor.pstryk_sell_daily_average": False,
-        "sensor.pstryk_sell_monthly_average": True,
-        "sensor.pstryk_sell_yearly_average": True,
-    }
+    result = _run(scenario())
+    assert len(result) == 6 and all(result.values()), result
+
+
+def test_fork_no_sensor_is_disabled_by_default(mods, env):
+    for sensor in _all_sensors(mods, env):
+        assert getattr(sensor, "_attr_entity_registry_enabled_default", True) is True, sensor.entity_id
 
 
 def test_fork_total_sell_average_ids_like_the_original_averages(mods, env):
@@ -1678,6 +1789,9 @@ def _all_sensors(mods, env):
         sensors += [S.PstrykAveragePriceSensor(cost, coords[t], p, "e")
                     for t in ("buy", "sell") for p in ("daily", "monthly", "yearly")]
         sensors.append(S.PstrykAverageSellPriceSensor(cost, "total", "e"))
+        sensors.append(S.PstrykAverageSellPriceSensor(cost, "total", "e", "buy"))
+        sensors.append(S.PstrykTotalBalanceSensor(cost, "e"))
+        sensors += [S.PstrykEnergyBalanceSensor(cost, p, "e") for p in S.BALANCE_PERIODS]
         sensors += [S.PstrykFlowSensor(cost, m, p, "e") for m, p in S.FLOW_SENSORS]
         sensors += [S.PstrykTotalSellSensor(cost, k, "e") for k in S.PstrykTotalSellSensor.KINDS]
         sensors += [S.PstrykFinancialBalanceSensor(cost, p, "e") for p in ("daily", "monthly", "yearly")]
@@ -1685,6 +1799,17 @@ def _all_sensors(mods, env):
         return sensors
 
     return _run(scenario())
+
+
+def test_fork_setup_registers_every_sensor_class_the_tests_cover(mods, env):
+    """_all_sensors mirrors async_setup_entry by hand; a class registered there
+    but missing from it (or the reverse) would escape the id, name and icon tests."""
+    import inspect
+    import re
+    src = inspect.getsource(mods.sensor.async_setup_entry)
+    registered = set(re.findall(r"\b(Pstryk\w+Sensor)\(", src))
+    covered = {type(s).__name__ for s in _all_sensors(mods, env)}
+    assert registered == covered, registered ^ covered
 
 
 def test_fork_icons_follow_one_scheme(mods, env):
@@ -1697,14 +1822,17 @@ def test_fork_icons_follow_one_scheme(mods, env):
         for p in ("daily", "monthly", "yearly"):
             expected[f"sensor.pstryk_{t}_{p}_average"] = icon
     expected["sensor.pstryk_sell_total_average"] = "mdi:tag-arrow-up"
-    for p in ("daily", "total"):
+    expected["sensor.pstryk_buy_total_average"] = "mdi:tag-arrow-down"
+    for p in ("daily", "monthly", "yearly", "total"):
         expected[f"sensor.pstryk_{p}_energy_bought"] = "mdi:transmission-tower-import"
         expected[f"sensor.pstryk_{p}_buy_cost"] = "mdi:cash-minus"
     for p in ("daily", "monthly", "yearly", "total"):
         expected[f"sensor.pstryk_{p}_energy_sold"] = "mdi:transmission-tower-export"
         expected[f"sensor.pstryk_{p}_sell_revenue"] = "mdi:cash-plus"
-    for p in ("daily", "monthly", "yearly"):
+    for p in ("daily", "monthly", "yearly", "total"):
         expected[f"sensor.pstryk_{p}_financial_balance"] = "mdi:scale-balance"
+    for p in ("daily", "monthly", "yearly"):
+        expected[f"sensor.pstryk_{p}_energy_balance"] = "mdi:transmission-tower"
     assert icons == expected
 
 
@@ -1749,10 +1877,24 @@ RELEASED_IDS = {
     "sensor.pstryk_prices_fetched": "pstryk_prices_fetched",
 }
 
+# Added in 2.3.0 (purchase counterparts and the kWh energy balance). From the
+# release on they must not change either.
+IDS_ADDED_IN_2_3_0 = {
+    "sensor.pstryk_monthly_buy_cost": "pstryk_buy_cost_monthly",
+    "sensor.pstryk_yearly_buy_cost": "pstryk_buy_cost_yearly",
+    "sensor.pstryk_monthly_energy_bought": "pstryk_energy_bought_monthly",
+    "sensor.pstryk_yearly_energy_bought": "pstryk_energy_bought_yearly",
+    "sensor.pstryk_buy_total_average": "pstryk_buy_total_average",
+    "sensor.pstryk_total_financial_balance": "pstryk_financial_balance_total",
+    "sensor.pstryk_daily_energy_balance": "pstryk_energy_balance_daily",
+    "sensor.pstryk_monthly_energy_balance": "pstryk_energy_balance_monthly",
+    "sensor.pstryk_yearly_energy_balance": "pstryk_energy_balance_yearly",
+}
+
 
 def test_fork_entity_and_unique_ids_never_change(mods, env):
     ids = {s.entity_id: s.unique_id for s in _all_sensors(mods, env)}
-    assert ids == RELEASED_IDS
+    assert ids == {**RELEASED_IDS, **IDS_ADDED_IN_2_3_0}
 
 
 def test_fork_names_group_by_period_then_direction(mods, env):
@@ -1766,24 +1908,33 @@ def test_fork_names_group_by_period_then_direction(mods, env):
         "Pstryk Daily Buy Cost",
         "Pstryk Daily Buy Price Average",
         "Pstryk Daily Buy Volume",
+        "Pstryk Daily Energy Balance",
         "Pstryk Daily Financial Balance",
         "Pstryk Daily Sell Price Average",
         "Pstryk Daily Sell Revenue",
         "Pstryk Daily Sell Volume",
         "Pstryk Json Buy",
         "Pstryk Json Sell",
+        "Pstryk Monthly Buy Cost",
         "Pstryk Monthly Buy Price Average",
+        "Pstryk Monthly Buy Volume",
+        "Pstryk Monthly Energy Balance",
         "Pstryk Monthly Financial Balance",
         "Pstryk Monthly Sell Price Average",
         "Pstryk Monthly Sell Revenue",
         "Pstryk Monthly Sell Volume",
         "Pstryk Prices Fetched",
         "Pstryk Total Buy Cost",
+        "Pstryk Total Buy Price Average",
         "Pstryk Total Buy Volume",
+        "Pstryk Total Financial Balance",
         "Pstryk Total Sell Price Average",
         "Pstryk Total Sell Revenue",
         "Pstryk Total Sell Volume",
+        "Pstryk Yearly Buy Cost",
         "Pstryk Yearly Buy Price Average",
+        "Pstryk Yearly Buy Volume",
+        "Pstryk Yearly Energy Balance",
         "Pstryk Yearly Financial Balance",
         "Pstryk Yearly Sell Price Average",
         "Pstryk Yearly Sell Revenue",

@@ -117,6 +117,11 @@ class SharedRequestLog:
             self._budgets[endpoint_key] = RequestBudget(API_HOURLY_LIMIT, BUDGET_WINDOW)
         return self._budgets[endpoint_key]
 
+    def describe(self) -> dict:
+        """Every endpoint's budget as the diagnostics show it (see RequestBudget.describe)."""
+        now = dt_util.utcnow()
+        return {key: budget.describe(now) for key, budget in self._budgets.items()}
+
     def _data(self) -> dict:
         now = dt_util.utcnow()
         return {key: b.to_dict(now) for key, b in self._budgets.items()}

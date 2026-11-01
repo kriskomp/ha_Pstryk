@@ -68,6 +68,7 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
         self._unsub_midnight = None
         self._had_tomorrow_prices = False
         self._unsub_budget_retry = None
+        self._budget_retry_at = None  # when the booked retry runs (diagnostics)
 
         # Fork: the price cache lives in /config/.storage (Home Assistant's place
         # for integration data), not in the integration's own folder, which HACS
@@ -291,6 +292,7 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
             self._unsub_budget_retry = None
             await self.async_request_refresh()
 
+        self._budget_retry_at = retry_at
         self._unsub_budget_retry = async_track_point_in_time(self.hass, _retry, retry_at)
 
     async def _fetch_prices(self, max_retries):
