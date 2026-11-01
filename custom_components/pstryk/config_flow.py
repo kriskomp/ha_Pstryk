@@ -25,6 +25,11 @@ from .const import (
     MIN_RETRY_DELAY,
     MAX_RETRY_DELAY,
     retry_attempts_setting,
+    prosumer_setting,
+    CONF_PROSUMER_ENTITIES,
+    PROSUMER_AUTO,
+    PROSUMER_SHOW,
+    PROSUMER_HIDE,
 )
 
 from .api_client import async_validate_api_key
@@ -285,6 +290,13 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
                     vol.All(vol.Coerce(int), vol.Range(min=1, max=24)),
             vol.Required(CONF_JSON_SENSOR, default=self.config_entry.options.get(
                 CONF_JSON_SENSOR, False)): bool,
+            vol.Required(CONF_PROSUMER_ENTITIES, default=prosumer_setting(
+                self.config_entry.options.get(CONF_PROSUMER_ENTITIES))): SelectSelector(
+                SelectSelectorConfig(
+                    options=[PROSUMER_AUTO, PROSUMER_SHOW, PROSUMER_HIDE],
+                    mode=SelectSelectorMode.DROPDOWN,
+                    translation_key="prosumer_entities",
+                )),
         }
 
         if mqtt_enabled:

@@ -93,6 +93,7 @@
           "retry_attempts": "API attempts (including the first)",
           "retry_delay": "API retry delay (seconds)",
           "json_sensor_enabled": "Enable JSON price sensors",
+          "prosumer_entities": "Sell entities (revenue, energy sold, average sell price)",
           "take_over_aio": "Take over Pstryk AiO"
         },
         "data_description": {
@@ -107,6 +108,7 @@
           "retry_attempts": "Attempts per request, the first one included (1-3). The Pstryk API allows 3 requests per hour in total, so more attempts make no sense and, when the API is down, each one uses up the limit. Recommended: 2",
           "retry_delay": "Wait time between API retry attempts",
           "json_sensor_enabled": "Adds Pstryk Json Buy/Sell sensors with standardized prices_today, prices_tomorrow and prices attributes (compatible with EV Smart Charging, cheapest-energy-hours etc.)",
+          "prosumer_entities": "Twelve entities only describe selling energy. Hidden entities keep recording, so showing them again leaves no gap in their history. Automatic: hidden while no sale has been seen in the Pstryk data, shown (with a notification) on the first sale",
           "take_over_aio": "Opens the next step: move the entities of Pstryk AiO to this integration (keeping ids, names and history)"
         }
       },
@@ -180,12 +182,23 @@
       "title": "Pstryk AiO was taken over and disabled",
       "description": "Entities taken over from Pstryk AiO (ids, names and history kept): {taken}\n\nRemoved: {removed}\n\nPstryk AiO is disabled. Do not enable it again: it would create duplicates and use up the API limit. You can remove it in Settings > Devices & services and uninstall it in HACS."
     },
+    "sale_detected": {
+      "title": "Pstryk Energy: sale detected",
+      "description": "Energy sold to the grid was seen for the first time, so the sell entities (revenue, energy sold, average sell price) are shown again."
+    },
     "migrated_from_aio_removed": {
       "title": "Pstryk AiO was taken over and removed",
       "description": "Entities taken over from Pstryk AiO (ids, names and history kept): {taken}\n\nRemoved: {removed}\n\nPstryk AiO was removed from Home Assistant. You can uninstall it in HACS."
     }
   },
   "selector": {
+    "prosumer_entities": {
+      "options": {
+        "auto": "Automatic: hide while nothing has been sold, show after the first sale",
+        "show": "Always show",
+        "hide": "Always hide"
+      }
+    },
     "aio_mode": {
       "options": {
         "disable": "Take over and disable Pstryk AiO (it can be removed later)",

@@ -230,6 +230,24 @@ Pstryk pozwala na 3 zapytania na godzinę na endpoint ([regulamin API](https://p
 - **`button.pstryk_refresh_prices`** pobiera ceny kupna i sprzedaży jednym zapytaniem. Przy wykorzystanym limicie nic nie wysyła i pokazuje powiadomienie z godziną, o której zwolni się miejsce.
 - **`sensor.pstryk_prices_fetched`** pokazuje, kiedy ceny będące teraz w użyciu zostały pobrane z API. Atrybut `tomorrow_available` mówi, czy są już ceny na jutro.
 
+### Ponawianie zapytań
+
+W opcjach (*Konfiguruj*) i przy pierwszej konfiguracji: **liczba prób** na jedno zapytanie (z pierwszą) i **opóźnienie** między próbami. Domyślnie 2 próby co 30 s, maksymalnie 3. Każda próba zużywa jedno z 3 zapytań na godzinę, więc więcej niż 3 nie ma sensu, a przy awarii API kolejne próby tylko zjadają limit. Zapisana wcześniej wartość większa niż 3 (stary domyślny wybór 5) jest używana jako 3; w *Konfiguruj* można ją ustawić ręcznie na 2.
+
+### Encje sprzedaży, gdy nie sprzedajesz energii
+
+12 encji dotyczy wyłącznie sprzedaży (przychód, energia sprzedana i średnia cena sprzedaży: dzień, miesiąc, rok, całość). Bez instalacji PV zostają zerowe lub nieznane, więc opcja **Encje prosumenckie** (*Konfiguruj*) decyduje o ich widoczności:
+
+- **Automatycznie** (domyślnie, także po aktualizacji): encje są **ukryte**, dopóki w danych nie widać żadnej sprzedaży (historia od 10.2024 oraz bieżący dzień, miesiąc i rok). Przy pierwszej sprzedaży są pokazywane i dostajesz jedno powiadomienie. Do czasu pobrania historii nic nie jest ukrywane.
+- **Pokaż**: nigdy nie ukrywa.
+- **Ukryj**: zawsze ukrywa.
+
+Encje są **ukrywane, nie wyłączane** – nadal zapisują historię, więc pokazanie ich później nie zostawia dziury. Ukryte encje są dostępne w *Ustawienia → Urządzenia i usługi → Encje* (filtr „Pokaż ukryte”). Integracja pokazuje z powrotem tylko to, co sama ukryła: encja ukryta lub pokazana ręcznie nie jest ruszana drugi raz. Bieżąca cena sprzedaży i sensory JSON ze sprzedażą zostają widoczne zawsze. Zmiana ustawienia zaczyna decyzję od nowa.
+
+### Diagnostyka
+
+*Ustawienia → Urządzenia i usługi → Pstryk Energy → Pobierz diagnostykę* podaje m.in.: stan limitu API (użyte zapytania z ostatniej godziny, godzina zwolnienia miejsca, blokada po 429), stan cen i kosztów (kiedy pobrano, czy aktualne, wartości okresów), ostatni przebieg pobierania kosztów i zaplanowane dociąganie, ustawienia ponawiania, encje bez wartości, wyłączone i ukryte oraz decyzję o encjach prosumenckich. Klucza API nie zawiera.
+
 ### Pierwsze uruchomienie
 
 - **Po instalacji** (i po każdym starcie, gdy zapisane dane kosztów nie są już aktualne, np. Home Assistant był wyłączony przez noc) koszty są pobierane **od razu po starcie** – encje kosztowe i sprzedaży mają wartości po kilku sekundach.

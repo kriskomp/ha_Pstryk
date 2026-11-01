@@ -100,6 +100,13 @@ def _stubs():
             "homeassistant.core", HomeAssistant=type("HomeAssistant", (), {}), callback=lambda f: f
         ),
         "homeassistant.components": _stub("homeassistant.components"),
+        "homeassistant.components.persistent_notification": _stub(
+            "homeassistant.components.persistent_notification"),
+        "homeassistant.helpers.translation": _stub(
+            "homeassistant.helpers.translation", async_get_translations=None),
+        "homeassistant.helpers.entity_registry": _stub(
+            "homeassistant.helpers.entity_registry",
+            RegistryEntryHider=types.SimpleNamespace(USER="user", INTEGRATION="integration")),
         "homeassistant.components.sensor": _stub(
             "homeassistant.components.sensor",
             SensorEntity=type("SensorEntity", (), {}),

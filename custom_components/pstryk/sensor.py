@@ -11,6 +11,7 @@ from .update_coordinator import PstrykDataUpdateCoordinator, is_likely_placehold
 from .energy_cost_coordinator import PstrykCostDataUpdateCoordinator
 from .api_client import BudgetExhausted, PstrykAPIClient
 from .tomorrow_poll import PstrykTomorrowPoller
+from .prosumer import ProsumerVisibility
 from .const import (
     DOMAIN,
     CONF_MQTT_48H_MODE,
@@ -19,6 +20,8 @@ from .const import (
     CONF_RETRY_DELAY,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_DELAY,
+    CONF_PROSUMER_ENTITIES,
+    DEFAULT_PROSUMER_ENTITIES,
     retry_attempts_setting,
 )
 from homeassistant.loader import async_get_integration
@@ -201,6 +204,23 @@ async def async_setup_entry(
     for period in BALANCE_PERIODS:
         remaining_entities.append(PstrykEnergyBalanceSensor(cost_coordinator, period, entry.entry_id))
 
+    # Sell-side entities are hidden for someone who sells no energy (prosumer.py).
+    # Decided from the cost data: when it arrives, and again as each entity is added.
+    visibility = ProsumerVisibility(
+        hass, entry.entry_id,
+        entry.options.get(CONF_PROSUMER_ENTITIES, DEFAULT_PROSUMER_ENTITIES),
+        [e.unique_id for e in remaining_entities if getattr(e, "prosumer", False)],
+        cost_coordinator,
+    )
+    await visibility.async_load()
+    hass.data[DOMAIN][f"{entry.entry_id}_prosumer"] = visibility
+
+    @callback
+    def _cost_data_arrived() -> None:
+        entry.async_create_background_task(hass, visibility.async_evaluate(), f"{DOMAIN}_prosumer")
+
+    entry.async_on_unload(cost_coordinator.async_add_listener(_cost_data_arrived))
+
     _LOGGER.info("Registering %d current price sensors with data and %d additional sensors as unavailable",
                  len(entities), len(remaining_entities))
     async_add_entities(entities + remaining_entities)
@@ -217,6 +237,20 @@ async def async_setup_entry(
 PRICE_ICONS = {"buy": "mdi:tag-arrow-down", "sell": "mdi:tag-arrow-up"}
 BALANCE_ICON = "mdi:scale-balance"
 ENERGY_BALANCE_ICON = "mdi:transmission-tower"
+
+
+class SellSideEntity:
+    """Mixin for an entity that only describes selling energy (prosumer.py hides it
+    for someone who sells none). `prosumer` is set per instance in the constructor."""
+
+    prosumer = False
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        # Its registry entry exists now, so a decision already taken can be applied to it.
+        visibility = self.hass.data[DOMAIN].get(f"{self.entry_id}_prosumer")
+        if self.prosumer and visibility is not None:
+            await visibility.async_evaluate()
 
 
 class PstrykPriceSensor(CoordinatorEntity, SensorEntity):
@@ -708,7 +742,7 @@ class PstrykJsonPriceSensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.last_update_success and self.coordinator.data is not None
 
 
-class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
+class PstrykAveragePriceSensor(SellSideEntity, RestoreEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     # Fork: updated by the cost coordinator's listener only. Home Assistant
     # would otherwise poll it every 30 s, and the "Last updated" attribute
@@ -721,6 +755,7 @@ class PstrykAveragePriceSensor(RestoreEntity, SensorEntity):
         self.cost_coordinator = cost_coordinator
         self.price_coordinator = price_coordinator
         self.price_type = price_coordinator.price_type
+        self.prosumer = self.price_type == "sell"
         self.period = period
         self.entry_id = entry_id
         self.entity_id = f"sensor.{DOMAIN}_{self.price_type}_{period}_average"
@@ -1064,13 +1099,14 @@ def _period_start(period: str):
     return start
 
 
-class PstrykFlowSensor(CoordinatorEntity, SensorEntity):
+class PstrykFlowSensor(SellSideEntity, CoordinatorEntity, SensorEntity):
     _attr_suggested_display_precision = 2
 
     def __init__(self, coordinator: PstrykCostDataUpdateCoordinator,
                  metric: str, period: str, entry_id: str):
         super().__init__(coordinator)
         self.metric = metric
+        self.prosumer = metric in ("sell_revenue", "energy_sold")
         self.period = period
         self.entry_id = entry_id
         (self._data_key, self._name_suffix, unit,
@@ -1207,7 +1243,7 @@ def _average_price(revenue, kwh):
     return round(revenue / kwh, 4)
 
 
-class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
+class PstrykTotalSellSensor(SellSideEntity, CoordinatorEntity, SensorEntity):
     """All-time totals since 01.10.2024 that never reset: lossless for statistics.
 
     Data arriving after a period's last update (the last hour of a day, for
@@ -1233,6 +1269,7 @@ class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator: PstrykCostDataUpdateCoordinator, kind: str, entry_id: str):
         super().__init__(coordinator)
         self.kind = kind
+        self.prosumer = kind in ("sell_revenue", "energy_sold")
         self.entry_id = entry_id
         (self._name, self._unique_id, unit, device_class,
          state_class, icon) = self.KINDS[kind]
@@ -1282,7 +1319,7 @@ class PstrykTotalSellSensor(CoordinatorEntity, SensorEntity):
                 and (self.coordinator.data or {}).get("history") is not None)
 
 
-class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
+class PstrykAverageSellPriceSensor(SellSideEntity, CoordinatorEntity, SensorEntity):
     """Real weighted average price = money / kWh of one direction for a period.
 
     Sell by default (the class name is kept for compatibility); direction "buy"
@@ -1299,6 +1336,7 @@ class PstrykAverageSellPriceSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.period = period
         self.direction = direction
+        self.prosumer = direction == "sell"
         self.entry_id = entry_id
         self._attr_icon = PRICE_ICONS[direction]
         # entity_id like the original averages: sensor.pstryk_sell_total_average.

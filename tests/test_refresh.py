@@ -57,12 +57,15 @@ def _parse_datetime(value):
 class _Coordinator:
     def __init__(self, hass, logger, name=None, **kwargs):
         self.hass, self.name, self.data, self.last_update_success = hass, name, None, True
+        self.listeners = []
 
     def async_update_listeners(self):
-        pass
+        for listener in list(self.listeners):
+            listener()
 
     def async_add_listener(self, listener):
-        return lambda: None
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener) if listener in self.listeners else None
 
     def async_set_updated_data(self, data):
         self.data, self.last_update_success = data, True
@@ -124,6 +127,17 @@ def _stub(name, **attrs):
     return module
 
 
+async def _noop(self):
+    pass
+
+
+TRANSLATIONS = {}  # what async_get_translations returns (the notification texts)
+
+
+async def _translations(hass, language, category, integrations):
+    return dict(TRANSLATIONS)
+
+
 def _stubs():
     dt = _stub(
         "homeassistant.util.dt",
@@ -154,7 +168,10 @@ def _stubs():
             "homeassistant.helpers.update_coordinator",
             DataUpdateCoordinator=_Coordinator,
             UpdateFailed=type("UpdateFailed", (Exception,), {}),
-            CoordinatorEntity=type("CoordinatorEntity", (), {"__init__": lambda self, c: None}),
+            CoordinatorEntity=type("CoordinatorEntity", (), {
+                "__init__": lambda self, c: None,
+                "async_added_to_hass": _noop,
+            }),
         ),
         "homeassistant.helpers.event": _stub("homeassistant.helpers.event", async_track_point_in_time=_track),
         "homeassistant.helpers.storage": _stub("homeassistant.helpers.storage", Store=_Store),
@@ -181,8 +198,11 @@ def _stubs():
             SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement", TOTAL="total", TOTAL_INCREASING="total_increasing"),
             SensorDeviceClass=types.SimpleNamespace(MONETARY="monetary", TIMESTAMP="timestamp", ENERGY="energy"),
         ),
+        "homeassistant.helpers.translation": _stub(
+            "homeassistant.helpers.translation", async_get_translations=_translations),
         "homeassistant.helpers.entity_registry": _stub(
             "homeassistant.helpers.entity_registry",
+            RegistryEntryHider=types.SimpleNamespace(USER="user", INTEGRATION="integration"),
             async_get=lambda hass: hass.registry,
             async_entries_for_config_entry=lambda registry, entry_id: [
                 e for e in registry.entities if e.config_entry_id == entry_id
@@ -209,6 +229,7 @@ def mods():
             sensor=importlib.import_module("pstryk.sensor"),
             button=importlib.import_module("pstryk.button"),
             diagnostics=importlib.import_module("pstryk.diagnostics"),
+            prosumer=importlib.import_module("pstryk.prosumer"),
         )
     finally:
         for name in [n for n in sys.modules if n == "pstryk" or n.startswith("pstryk.")]:
@@ -788,6 +809,7 @@ def test_cost_data_of_another_entry_is_not_restored(mods, env):
 
 def _average(mods, cost, coords, period, last_state=None):
     sensor = mods.sensor.PstrykAveragePriceSensor(cost, coords["buy"], period, "e")
+    sensor.hass = cost.hass  # set by Home Assistant before async_added_to_hass
     sensor.last_state = last_state
     _run(sensor.async_added_to_hass())
     return sensor
@@ -871,6 +893,7 @@ def test_fork_averages_use_only_the_energy_pstryk_billed(mods, env):
     assert buy.native_value == 0.5
     assert buy.extra_state_attributes["Energy bought"] == 20.0  # the energy the average used
     sell = mods.sensor.PstrykAveragePriceSensor(restarted, coords["sell"], "monthly", "e")
+    sell.hass = restarted.hass
     _run(sell.async_added_to_hass())
     assert sell.native_value == 0.6
 

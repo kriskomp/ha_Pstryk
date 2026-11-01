@@ -57,6 +57,10 @@ Kod polecający Pstryk: **1ML2X7**.
   - nie przejmuje, gdy klucze API różnią się (inny licznik),
   - zostawia podsumowanie w *Naprawach*.
   Opis, tabela encji i uwagi: README → „Przejście z Pstryk AiO”.
+- **Ponawianie zapytań: domyślnie 2 próby co 30 s, maksimum 3** (limit API to 3 zapytania na godzinę, każda próba jedno zużywa). Domyślne 5 prób przy pierwszej konfiguracji mogło zjeść cały limit przy jednej awarii. Zapisana wartość większa niż 3 jest używana jako 3; nic nie jest zmieniane automatycznie w zapisanych opcjach.
+- **Encje sprzedaży ukrywane dla osób bez sprzedaży energii.** Nowa opcja *Encje prosumenckie*: Automatycznie (domyślnie, także po aktualizacji) / Pokaż / Ukryj. 12 encji sprzedaży jest ukrywanych (nie wyłączanych – historia się zapisuje), dopóki w danych nie widać sprzedaży; przy pierwszej sprzedaży są pokazywane z jednym powiadomieniem. Ręczne ukrycie lub pokazanie encji przez użytkownika jest respektowane; stan jest zapisany, więc restart niczego nie powtarza.
+- **Diagnostyka przebudowana**: limit API i godzina zwolnienia miejsca, stan cen i kosztów, ostatni przebieg i dociąganie, encje bez wartości/wyłączone/ukryte, ustawienia ponawiania, decyzja o encjach prosumenckich. Bez klucza API.
+- **Dziennik**: komunikaty o pobieraniu danych dziennych podają datę w czasie lokalnym (dotąd UTC, co po północy lokalnej mylnie wskazywało wczorajszy dzień).
 - Testy: kreator i przejęcie na atrapach rejestrów Home Assistanta (przeniesienie, nazwy, wyłączenia, konflikt,
   powtórzenie, oba warianty AiO, przepływ konfiguracji i opcji), nowe sensory, identyfikatory i nazwy. Testy
   na prawdziwym Home Assistancie nie były uruchamiane w środowisku, w którym powstała zmiana (brak dostępu do PyPI).

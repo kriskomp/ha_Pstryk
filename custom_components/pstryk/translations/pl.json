@@ -83,10 +83,12 @@
         "description": "Zmodyfikuj konfigurację Pstryk Energy",
         "data": {
           "json_sensor_enabled": "Włącz sensory JSON z cenami",
+          "prosumer_entities": "Encje sprzedaży (przychód, energia sprzedana, średnia cena sprzedaży)",
           "take_over_aio": "Przejmij Pstryk AiO"
         },
         "data_description": {
           "json_sensor_enabled": "Dodaje sensory Pstryk Json Buy/Sell ze standardowymi atrybutami prices_today, prices_tomorrow i prices (kompatybilne z EV Smart Charging, cheapest-energy-hours itp.)",
+          "prosumer_entities": "Dwanaście encji opisuje tylko sprzedaż energii. Ukryte encje nadal zapisują historię, więc ich ponowne pokazanie nie zostawia dziury. Automatycznie: ukryte, dopóki w danych Pstryk nie widać żadnej sprzedaży, po pierwszej sprzedaży pokazane (z powiadomieniem)",
           "take_over_aio": "Otwiera kolejny krok: przeniesienie encji Pstryk AiO do tej integracji (z identyfikatorami, nazwami i historią)"
         }
       },
@@ -160,12 +162,23 @@
       "title": "Pstryk AiO został przejęty i wyłączony",
       "description": "Encje przejęte z Pstryk AiO (identyfikatory, nazwy i historia zostały): {taken}\n\nUsunięte: {removed}\n\nPstryk AiO jest wyłączony. Nie włączaj go ponownie: utworzyłby duplikaty i zużywał limit API. Możesz go usunąć w Ustawienia > Urządzenia i usługi oraz odinstalować w HACS."
     },
+    "sale_detected": {
+      "title": "Pstryk Energy: wykryto sprzedaż",
+      "description": "Po raz pierwszy widać energię oddaną do sieci, więc encje sprzedaży (przychód, energia sprzedana, średnia cena sprzedaży) są znów widoczne."
+    },
     "migrated_from_aio_removed": {
       "title": "Pstryk AiO został przejęty i usunięty",
       "description": "Encje przejęte z Pstryk AiO (identyfikatory, nazwy i historia zostały): {taken}\n\nUsunięte: {removed}\n\nPstryk AiO został usunięty z Home Assistanta. Możesz go odinstalować w HACS."
     }
   },
   "selector": {
+    "prosumer_entities": {
+      "options": {
+        "auto": "Automatycznie: ukryj, dopóki nic nie sprzedano, pokaż po pierwszej sprzedaży",
+        "show": "Zawsze pokazuj",
+        "hide": "Zawsze ukrywaj"
+      }
+    },
     "aio_mode": {
       "options": {
         "disable": "Przejmij i wyłącz Pstryk AiO (można go usunąć później)",
