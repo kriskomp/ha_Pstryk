@@ -94,7 +94,8 @@
           "retry_delay": "API retry delay (seconds)",
           "json_sensor_enabled": "Enable JSON price sensors",
           "prosumer_entities": "Sell entities (revenue, energy sold, average sell price)",
-          "take_over_aio": "Take over Pstryk AiO"
+          "take_over_aio": "Take over Pstryk AiO",
+          "unify_entity_ids": "Unify entity IDs (next step: preview and choice)"
         },
         "data_description": {
           "buy_top": "How many cheapest buy prices to highlight (1-24 hours)",
@@ -109,7 +110,8 @@
           "retry_delay": "Wait time between API retry attempts",
           "json_sensor_enabled": "Adds Pstryk Json Buy/Sell sensors with standardized prices_today, prices_tomorrow and prices attributes (compatible with EV Smart Charging, cheapest-energy-hours etc.)",
           "prosumer_entities": "Twelve entities only describe selling energy. Without a sale they stay at zero or unknown. Automatic: disabled while no sale has been seen in the Pstryk data, enabled (with a notification) on the first sale; Home Assistant then adds them within about 30 seconds. Their values come from the Pstryk totals, so nothing is missing afterwards",
-          "take_over_aio": "Opens the next step: move the entities of Pstryk AiO to this integration (keeping ids, names and history)"
+          "take_over_aio": "Opens the next step: move the entities of Pstryk AiO to this integration (keeping ids, names and history)",
+          "unify_entity_ids": "Taken-over Pstryk AiO entities still carry their old IDs. Opens a preview of the change to this integration's IDs; nothing changes without your choice"
         }
       },
       "price_settings": {
@@ -166,6 +168,17 @@
         "data_description": {
           "mode": "What happens to the Pstryk AiO entry once its entities have been moved"
         }
+      },
+      "unify_ids": {
+        "title": "Unify entity IDs",
+        "description": "Preview of the change to this integration's IDs (in brackets: references found in automations, scripts and scenes):\n\n{preview}\n\n✓ free, can be changed. ⚠ collision: data of an earlier entity (statistics, history) remains under the new ID; \"change also with collision\" deletes only that orphaned data of the new ID. ✖ another entity holds the new ID, this one is not changed.\n\nLong-term history (statistics) moves to the new ID with the entity. Home Assistant does not fix references in automations, scripts, scenes, dashboards and the Energy dashboard: fix them after the change. A backup is recommended. References inside templates are not detected.\n\nEntities with a name set in the registry: {named}.",
+        "data": {
+          "unify_mode": "What to do with the IDs",
+          "english_names": "Return to English names"
+        },
+        "data_description": {
+          "english_names": "Removes the name stored in the registry (e.g. the Polish AiO label), so the entity gets this integration's name. Also affects names set by hand"
+        }
       }
     },
     "error": {
@@ -204,6 +217,13 @@
         "disable": "Take over and disable Pstryk AiO (it can be removed later)",
         "remove": "Take over and remove Pstryk AiO",
         "fresh": "Do not take over, set up as a new integration"
+      }
+    },
+    "unify_mode": {
+      "options": {
+        "keep": "Keep the IDs as they are",
+        "change": "Change (only those without collision)",
+        "change_all": "Change also with collision (deletes orphaned data of the new ID)"
       }
     }
   }

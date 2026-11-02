@@ -8,6 +8,14 @@ Kod polecający Pstryk: **1ML2X7**.
 
 ## 2.4.0
 
+- **Ujednolicenie identyfikatorów przejętych encji (opcjonalne, w opcjach integracji).** Przejęcie z Pstryk AiO
+  zostawia jego identyfikatory i polskie etykiety. Nowe pole *Konfiguruj → „Ujednolić identyfikatory encji”*
+  (widoczne tylko, gdy jest co zmieniać; domyślnie wyłączone) otwiera podgląd „stare → nowe” z oznaczeniem
+  kolizji i liczbą odwołań w automatyzacjach, skryptach i scenach. Wybór bez wartości domyślnej: zostaw / zmień
+  (tylko bez kolizji) / zmień także z kolizją (kasuje wyłącznie osierocone dane nowego identyfikatora; identyfikator
+  zajęty przez inną encję nigdy nie jest ruszany). Osobny przełącznik przywraca angielskie nazwy. Statystyki idą za
+  encją; Home Assistant nie poprawia odwołań w automatyzacjach i panelu Energia (opis w README). Nic nie jest
+  zmieniane automatycznie, kreator przejęcia działa jak dotąd.
 - **Kiedy Pstryk opublikował ceny na kolejny dzień (nowe encje).** Pstryk publikuje ceny na następny dzień po
   12:00, raz o 12:05, raz o 14:00, a API nie podaje godziny publikacji. Integracja zapisuje teraz chwilę, w której
   po raz pierwszy pobrała **komplet cen** na kolejny dzień (cena i `tge_price` dla każdej godziny doby: 23, 24

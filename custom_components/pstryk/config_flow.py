@@ -34,10 +34,22 @@ from .const import (
 
 from .api_client import async_validate_api_key
 from .migrate import aio_api_key, aio_candidates, async_migrate_from_aio, plan
+from .unify_ids import (
+    MODE_CHANGE,
+    MODE_CHANGE_ALL,
+    MODE_KEEP,
+    STATUS_OK,
+    async_apply,
+    async_items,
+    has_work,
+)
 
 CONF_AIO_MODE = "mode"
 CONF_AIO_ENTRY = "aio_entry"
 CONF_TAKE_OVER_AIO = "take_over_aio"
+CONF_UNIFY_IDS = "unify_entity_ids"
+CONF_UNIFY_MODE = "unify_mode"
+CONF_ENGLISH_NAMES = "english_names"
 # What the user chose for Pstryk AiO: take over its entities and then disable
 # or remove it, or set this integration up on its own. No default is preset.
 MODE_FRESH = "fresh"
@@ -250,6 +262,7 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self):
         self._new_options = None
+        self._unify_after = False
 
     async def async_step_init(self, user_input=None):
         errors = {}
@@ -257,6 +270,7 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             user_input = dict(user_input)
             take_over = user_input.pop(CONF_TAKE_OVER_AIO, False)
+            unify = user_input.pop(CONF_UNIFY_IDS, False)
             mqtt_enabled = user_input.get(CONF_MQTT_ENABLED, False)
             if mqtt_enabled:
                 mqtt_configured = await self._check_mqtt_configuration()
@@ -264,9 +278,12 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
                     errors["base"] = "mqtt_not_configured"
             
             if not errors:
+                self._new_options = user_input
+                self._unify_after = unify
                 if take_over and aio_candidates(self.hass):
-                    self._new_options = user_input
                     return await self.async_step_migrate_aio()
+                if unify:
+                    return await self.async_step_unify_ids()
                 return self.async_create_entry(title="", data=user_input)
 
         mqtt_enabled = False
@@ -322,6 +339,8 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
 
         if aio_candidates(self.hass):
             schema[vol.Optional(CONF_TAKE_OVER_AIO, default=False)] = bool
+        if has_work(await async_items(self.hass, self.config_entry)):
+            schema[vol.Optional(CONF_UNIFY_IDS, default=False)] = bool
 
         description_text = "Configure your energy price monitoring settings"
         if mqtt_enabled:
@@ -353,6 +372,8 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
                     # Nothing changed, so no update listener reloads the entry:
                     # reload it for the moved entities to start.
                     self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+                if self._unify_after:
+                    return await self.async_step_unify_ids()
                 return self.async_create_entry(title="", data=self._new_options)
 
         return self.async_show_form(
@@ -360,6 +381,40 @@ class PstrykOptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=_aio_schema(entries, with_fresh=False),
             description_placeholders=_aio_placeholders(self.hass, entries),
             errors=errors,
+        )
+
+    async def async_step_unify_ids(self, user_input=None):
+        """Optional: give taken-over entities this integration's own ids and names."""
+        items = await async_items(self.hass, self.config_entry)
+        if user_input is not None:
+            mode = user_input[CONF_UNIFY_MODE]
+            english = user_input.get(CONF_ENGLISH_NAMES, False)
+            done = await async_apply(self.hass, self.config_entry, mode, english)
+            if (done["renamed"] or done["names"]) and self._new_options == dict(self.config_entry.options):
+                # No options change, so no update listener reloads the entry.
+                self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+            return self.async_create_entry(title="", data=self._new_options)
+
+        lines = []
+        for i in items:
+            if i.status == STATUS_OK:
+                continue
+            mark = {"free": "✓", "collision": "⚠", "blocked": "✖"}[i.status]
+            lines.append(f"{mark} {i.entity_id} → {i.target} ({i.references})")
+        schema = vol.Schema({
+            vol.Required(CONF_UNIFY_MODE): SelectSelector(SelectSelectorConfig(
+                options=[MODE_KEEP, MODE_CHANGE, MODE_CHANGE_ALL],
+                mode=SelectSelectorMode.LIST, translation_key="unify_mode",
+            )),
+            vol.Required(CONF_ENGLISH_NAMES, default=False): bool,
+        })
+        return self.async_show_form(
+            step_id="unify_ids",
+            data_schema=schema,
+            description_placeholders={
+                "preview": "\n".join(f"- {line}" for line in lines) or "-",
+                "named": str(sum(1 for i in items if i.name_set)),
+            },
         )
 
     async def _check_mqtt_configuration(self):

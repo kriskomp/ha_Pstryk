@@ -151,6 +151,21 @@ Po pierwszym starcie ceny są pobierane od nowa (pamięć cen oryginału jest ka
 - Wyłączonego AiO **nie włączaj ponownie** – założyłby duplikaty z końcówką `_2` i zużywał limit API.
 - Wartości mogą różnić się o grosze od AiO: AiO sumuje dobę z godzin zaokrąglonych do 2 miejsc, fork bierze dobę wprost z rozliczenia Pstryk.
 
+#### Ujednolicenie identyfikatorów encji (opcjonalne, później)
+
+Przejęcie **celowo zostawia** stare identyfikatory AiO (np. `sensor.pstryk_obecna_cena_zakupu_pradu`), żeby nic się nie zepsuło od razu. Gdy chcesz mieć identyfikatory tej integracji (`sensor.pstryk_current_buy_price`), albo zmienisz zdanie później: *Pstryk Energy → Konfiguruj → zaznacz „Ujednolić identyfikatory encji”* (pole pojawia się tylko, gdy jest co zmieniać; domyślnie wyłączone). Nic nie dzieje się bez Twojego wyboru:
+
+1. **Podgląd** „stare → nowe” z oznaczeniem ✓ wolne, ⚠ kolizja, ✖ zajęte oraz liczbą odwołań znalezionych w automatyzacjach, skryptach i scenach (odwołania w szablonach nie są wykrywane).
+2. **Wybór** (bez ustawienia domyślnego): *zostaw*, *zmień* (tylko te bez kolizji) albo *zmień także z kolizją*.
+3. **Osobny przełącznik nazw:** „Wróć do angielskich nazw” usuwa nazwę zapisaną w rejestrze (np. polską etykietę AiO), więc encja dostaje nazwę z tej integracji. Dotyczy też nazw ustawionych ręcznie. Można go użyć bez zmiany identyfikatorów.
+
+Co oznacza kolizja: pod nowym identyfikatorem zostały dane dawnej encji (statystyki, stany), np. po wcześniejszej instalacji forka obok AiO. „Zmień także z kolizją” kasuje **tylko te osierocone dane nowego identyfikatora** i dopiero wtedy zmienia nazwę; dane przenoszonej encji nie są kasowane. Identyfikator zajęty przez inną encję (✖) nigdy nie jest ruszany.
+
+Warto wiedzieć przed zmianą:
+- Statystyki długoterminowe (wykresy, panel Energia) idą za encją na nowy identyfikator. Historia stanów (domyślnie 10 dni) w niektórych wersjach Home Assistanta (2024.4+) może nie przejść; trwała historia to statystyki.
+- Home Assistant **nie poprawia odwołań** w automatyzacjach, skryptach, scenach, kartach i ustawieniach panelu Energia. Po zmianie popraw je ręcznie według podglądu.
+- Zrób kopię zapasową przed zmianą. Po zmianie integracja przeładowuje się sama.
+
 ### Metoda 2: Ręczna instalacja
 1. Utwórz folder `custom_components/pstryk` w katalogu konfiguracyjnym HA
 2. Wgraj wszystkie pliki z repozytorium.
