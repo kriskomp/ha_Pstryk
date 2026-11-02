@@ -2,7 +2,8 @@
   "domain": "pstryk",
   "name": "Pstryk Energy",
   "after_dependencies": [
-    "mqtt"
+    "mqtt",
+    "recorder"
   ],
   "codeowners": [
     "@kriskomp"
