@@ -22,6 +22,7 @@ To jest fork integracji [balgerion/ha_Pstryk](https://github.com/balgerion/ha_Ps
 | Limit API Pstryk (3 zapytania/h na endpoint) | nie liczony – restarty, ponowienia i automatyzacje z `update_entity` mogą go przekroczyć (błąd 429) | pilnowany: jeden licznik dla wszystkich zapytań, zapisywany na czas restartu (z [PR #30](https://github.com/balgerion/ha_Pstryk/pull/30) autorstwa mnarozny) |
 | Ceny | z pamięci; zapytanie o 00:01 | z pamięci; zapytanie o 00:05 i przy sprawdzaniu cen na jutro |
 | Ceny na jutro | od 14:00 (tryb 48h) albo dopiero o 00:01 | od 12:05, co 20 minut do skutku, w każdym trybie |
+| Kiedy pojawiły się ceny na jutro | brak informacji (tylko atrybut „Tomorrow prices available”, który wraca do `false` o północy) | `sensor.pstryk_next_day_prices_published` (data i godzina wykrycia, jedna na każdy dzień roku, zapamiętana po restarcie) i `event.pstryk_next_day_prices` (zdarzenie raz dziennie, do wyzwalania automatyzacji) – patrz [Publikacja cen na kolejny dzień](#publikacja-cen-na-kolejny-dzień) |
 | Składniki ceny w `sensor.pstryk_json_buy` / `_sell` | brak | `tge_price`, dystrybucja, opłata, VAT, akcyza (z [PR #29](https://github.com/balgerion/ha_Pstryk/pull/29) autorstwa mnarozny) |
 | Koszty, bilanse, średnie | co godzinę o :01 | co godzinę o :05:30 (dane godziny są w API do 3 min po jej końcu), po restarcie odtwarzane z pamięci |
 | Brak miejsca w limicie API | – | wpis informacyjny w dzienniku (nie ostrzeżenie); brakujące dane kosztów dociągane zaraz po zwolnieniu miejsca, nie dopiero za godzinę |
@@ -196,6 +197,8 @@ Po pierwszym starcie ceny są pobierane od nowa (pamięć cen oryginału jest ka
 | `sensor.pstryk_json_buy`                | Ceny kupna 48h w formacie JSON (opcjonalny)  |
 | `sensor.pstryk_json_sell`               | Ceny sprzedaży 48h w formacie JSON (opcjonalny) |
 | `sensor.pstryk_prices_fetched`          | Czas pobrania z API cen, które są teraz w użyciu |
+| `sensor.pstryk_next_day_prices_published` | Kiedy integracja znalazła ceny na kolejny dzień (znacznik czasu, fork) |
+| `event.pstryk_next_day_prices`          | Zdarzenie „ceny na kolejny dzień opublikowane”, raz dziennie (fork) |
 | `button.pstryk_refresh_prices`          | Jednorazowe pobranie cen kupna i sprzedaży   |
 
 ### Encje przepływów i sprzedaży (fork kriskomp/ha_Pstryk)
@@ -232,6 +235,51 @@ Pstryk pozwala na 3 zapytania na godzinę na endpoint ([regulamin API](https://p
 - **`button.pstryk_refresh_prices`** pobiera ceny kupna i sprzedaży jednym zapytaniem. Przy wykorzystanym limicie nic nie wysyła i pokazuje powiadomienie z godziną, o której zwolni się miejsce.
 - **`sensor.pstryk_prices_fetched`** pokazuje, kiedy ceny będące teraz w użyciu zostały pobrane z API. Atrybut `tomorrow_available` mówi, czy są już ceny na jutro.
 
+### Publikacja cen na kolejny dzień
+
+Pstryk publikuje ceny na następny dzień po 12:00, raz o 12:05, raz o 12:20, raz o 14:00. API nie podaje godziny publikacji, więc integracja zapisuje **chwilę, w której po raz pierwszy znalazła komplet cen na kolejny dzień**. Wykrycie następuje przy sprawdzeniu o 12:05, 12:25, 12:45 i dalej co 20 minut, więc godzina jest dokładna z dokładnością do 20 minut. Niczego nie dodaje do zapytań do API.
+
+**Komplet** oznacza cenę dla każdej godziny doby (23, 24 lub 25 godzin w dniach zmiany czasu) i `tge_price` w każdym wierszu. Przed publikacją Pstryk wysyła wiersze z ceną `null`, więc ceny kupna jednoznacznie odróżniają oba stany.
+
+- **`sensor.pstryk_next_day_prices_published`** (znacznik czasu, `device_class: timestamp`): godzina wykrycia ostatniej publikacji. Jedna wartość na każdy dzień roku (365 lub 366), pierwsze wykrycie dnia zostaje i późniejsze pobrania go nie przesuwają. Wartość trzyma się do następnej publikacji, także po północy. Atrybuty: `prices_for` (dzień, którego ceny dotyczą, `2026-11-04`), `prices_for_display` (ten sam dzień jako `04.11.2026`), `late` (`true`, gdy ceny znaleziono dopiero po północy dnia, którego dotyczą), `next_day_available` (`true`, gdy `prices_for` to jutro). Sensor jest dostępny także przy awarii API.
+- **`event.pstryk_next_day_prices`** (encja zdarzeń): zdarzenie `published` wysyłane **raz** na każdy dzień, z atrybutami `prices_for`, `prices_for_display`, `published_at` i `late`. Do wyzwalania automatyzacji służy zmiana stanu tej encji.
+
+**Restart i przeładowanie:** zapis jest trzymany w `/config/.storage/pstryk_next_day_published` razem z identyfikatorem wpisu, więc restart Home Assistanta, przeładowanie integracji i aktualizacja przez HACS go zachowują, a zdarzenie nie powtarza się. Jeśli Home Assistant był wyłączony w chwili publikacji, godziną wykrycia jest pierwsze pobranie po starcie, a zdarzenie wysyłane jest dopiero po pełnym starcie Home Assistanta (wcześniej automatyzacje jeszcze nie nasłuchują). Zdarzenie dla dnia, który już minął, nie jest wysyłane.
+
+**Pierwszy zapis po aktualizacji do 2.4.0** powstaje po cichu, bez zdarzenia: ceny na jutro, które już są w pamięci, dostają godzinę ich pobrania (może być późniejsza niż prawdziwa publikacja), a `late` jest wtedy puste. Pierwsze zdarzenie przyjdzie przy następnej publikacji.
+
+**Przykładowa automatyzacja** (powiadomienie z rekomendacją po każdej publikacji; sensory JSON trzeba włączyć w opcjach integracji, a `notify.mobile_app_telefon` zamienić na własną usługę):
+
+```yaml
+alias: Pstryk – ceny na jutro opublikowane
+description: Raz dziennie, zaraz po publikacji cen na kolejny dzień.
+triggers:
+  - trigger: state
+    entity_id: event.pstryk_next_day_prices
+conditions:
+  # Zabezpieczenie: nie więcej niż raz dziennie, także gdyby Home Assistant po restarcie
+  # odtworzył stan encji zdarzeń.
+  - condition: template
+    value_template: >
+      {{ this.attributes.last_triggered is none
+         or as_local(as_datetime(this.attributes.last_triggered)).date() != now().date() }}
+actions:
+  - variables:
+      rows: "{{ state_attr('sensor.pstryk_json_buy', 'prices_tomorrow') | sort(attribute='price') }}"
+  - action: notify.mobile_app_telefon
+    data:
+      title: "Pstryk: ceny na {{ trigger.to_state.attributes.prices_for_display }}"
+      message: >
+        Opublikowano o {{ as_local(as_datetime(trigger.to_state.attributes.published_at)).strftime('%H:%M') }}.
+        Najtaniej {{ as_local(as_datetime(rows[0].time)).strftime('%H:%M') }}
+        ({{ rows[0].price }} PLN/kWh), najdrożej {{ as_local(as_datetime(rows[-1].time)).strftime('%H:%M') }}
+        ({{ rows[-1].price }} PLN/kWh).
+```
+
+Warunek `last_triggered` jest zabezpieczeniem, a nie wymogiem: samo zdarzenie przychodzi raz na dzień. Inny wariant bez zdarzenia: wyzwalacz `trigger: state` na `sensor.pstryk_next_day_prices_published` (zmienia się raz na dobę), ale taki wyzwalacz nie obejmie publikacji znalezionej, gdy Home Assistant dopiero się uruchamia.
+
+Przykład wygenerujesz też na bieżąco: opisz asystentowi (np. Claude), co ma robić powiadomienie, podając nazwy encji z tej sekcji, a dostaniesz gotowy YAML do wklejenia w edytorze automatyzacji.
+
 ### Ponawianie zapytań
 
 W opcjach (*Konfiguruj*) i przy pierwszej konfiguracji: **liczba prób** na jedno zapytanie (z pierwszą) i **opóźnienie** między próbami. Domyślnie 2 próby co 30 s, maksymalnie 3. Każda próba zużywa jedno z 3 zapytań na godzinę, więc więcej niż 3 nie ma sensu, a przy awarii API kolejne próby tylko zjadają limit. Zapisana wcześniej wartość większa niż 3 (stary domyślny wybór 5) jest używana jako 3; w *Konfiguruj* można ją ustawić ręcznie na 2.
@@ -248,7 +296,7 @@ Wyłączone, a nie ukryte, bo ukryta encja nadal jest wypisana na stronie urząd
 
 ### Diagnostyka
 
-*Ustawienia → Urządzenia i usługi → Pstryk Energy → Pobierz diagnostykę* podaje m.in.: stan limitu API (użyte zapytania z ostatniej godziny, godzina zwolnienia miejsca, blokada po 429), stan cen i kosztów (kiedy pobrano, czy aktualne, wartości okresów), ostatni przebieg pobierania kosztów i zaplanowane dociąganie, ustawienia ponawiania, encje bez wartości, wyłączone i ukryte oraz decyzję o encjach prosumenckich. Klucza API nie zawiera.
+*Ustawienia → Urządzenia i usługi → Pstryk Energy → Pobierz diagnostykę* podaje m.in.: stan limitu API (użyte zapytania z ostatniej godziny, godzina zwolnienia miejsca, blokada po 429), stan cen i kosztów (kiedy pobrano, czy aktualne, wartości okresów), ostatni przebieg pobierania kosztów i zaplanowane dociąganie, ustawienia ponawiania, publikację cen na kolejny dzień (dla jakiego dnia, kiedy znaleziona, czy ogłoszona), encje bez wartości, wyłączone i ukryte oraz decyzję o encjach prosumenckich. Klucza API nie zawiera.
 
 ### Pierwsze uruchomienie
 

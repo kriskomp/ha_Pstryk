@@ -212,6 +212,16 @@ class _Flow:
         return list(self.current_entries)
 
 
+class _NoTracker:
+    """The publication tracker is not under test here."""
+
+    def __init__(self, hass, entry_id):
+        pass
+
+    async def async_load(self):
+        pass
+
+
 def _stubs(hass_holder):
     registry_mod = _mod(
         "homeassistant.helpers.entity_registry",
@@ -274,6 +284,7 @@ def _stubs(hass_holder):
         "pstryk.api_client": _mod("pstryk.api_client", async_validate_api_key=None),
         "pstryk.mqtt_publisher": _mod("pstryk.mqtt_publisher", PstrykMqttPublisher=object),
         "pstryk.mqtt_common": _mod("pstryk.mqtt_common", setup_periodic_mqtt_publish=None),
+        "pstryk.publication": _mod("pstryk.publication", PublicationTracker=_NoTracker),
     }
 
 

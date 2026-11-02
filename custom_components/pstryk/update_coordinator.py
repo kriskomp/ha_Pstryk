@@ -160,6 +160,7 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
         integration_path = os.path.dirname(os.path.abspath(__file__))
         self._legacy_cache_file = os.path.join(integration_path, f"cache_{price_type}.json")
         self._has_tomorrow = False
+        self.publication = None  # PublicationTracker (buy only), set by sensor.py
 
         if retry_attempts is None:
             retry_attempts = DEFAULT_RETRY_ATTEMPTS
@@ -449,6 +450,9 @@ class PstrykDataUpdateCoordinator(DataUpdateCoordinator):
             new_data["has_tomorrow"] = self._has_tomorrow
 
             await self._save_cache(new_data)
+
+            if self.publication is not None:
+                await self.publication.async_observe(new_data)
 
             if self.mqtt_48h_mode:
                 await self._check_and_publish_mqtt(new_data)

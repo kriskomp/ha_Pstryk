@@ -86,6 +86,8 @@ async def async_setup_entry(
             retry_delay,
             entry.entry_id
         )
+        if price_type == "buy":
+            coordinator.publication = hass.data[DOMAIN].get(f"{entry.entry_id}_publication")
         coordinators.append((coordinator, price_type, key))
 
     cost_coordinator = PstrykCostDataUpdateCoordinator(
@@ -137,6 +139,11 @@ async def async_setup_entry(
     buy_coord = None
     sell_coord = None
 
+    # Cache start-up sends no request, so nothing was observed yet.
+    tracker = hass.data[DOMAIN].get(f"{entry.entry_id}_publication")
+    if tracker is not None:
+        await tracker.async_observe(next((c.data for c, t, _ in price_coordinators if t == "buy"), None))
+
     for coordinator, coordinator_type, key in coordinators:
         hass.data[DOMAIN][key] = coordinator
 
@@ -156,6 +163,8 @@ async def async_setup_entry(
             if coordinator_type == "buy":
                 buy_coord = coordinator
                 entities.append(PstrykPricesFetchedSensor(coordinator, entry.entry_id))
+                if tracker is not None:
+                    entities.append(PstrykNextDayPublishedSensor(coordinator, tracker, entry.entry_id))
             elif coordinator_type == "sell":
                 sell_coord = coordinator
 
@@ -1062,6 +1071,57 @@ class PstrykPricesFetchedSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         return {"tomorrow_available": self.coordinator._has_tomorrow}
+
+
+class PstrykNextDayPublishedSensor(CoordinatorEntity, SensorEntity):
+    """When Pstryk published the prices for the next day (found by the integration).
+
+    One value per calendar day, kept across restarts (see publication.py). The
+    state stays until the next publication, also after midnight.
+    """
+
+    _attr_icon = "mdi:calendar-clock"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: PstrykDataUpdateCoordinator, tracker, entry_id: str):
+        super().__init__(coordinator)
+        self._tracker = tracker
+        self.entry_id = entry_id
+        self.entity_id = f"sensor.{DOMAIN}_next_day_prices_published"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self._tracker.add_listener(self.async_write_ha_state))
+
+    @property
+    def name(self) -> str:
+        return "Pstryk Next Day Prices Published"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{DOMAIN}_next_day_prices_published"
+
+    @property
+    def device_info(self):
+        return _pstryk_device_info(self.hass)
+
+    @property
+    def available(self) -> bool:
+        return True  # the record is local; an API outage does not erase it
+
+    @property
+    def native_value(self):
+        return self._tracker.published_at
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        day = self._tracker.prices_for
+        return {
+            "prices_for": day.isoformat() if day else None,
+            "prices_for_display": day.strftime("%d.%m.%Y") if day else None,
+            "late": self._tracker.late,
+            "next_day_available": bool(day and day == dt_util.now().date() + timedelta(days=1)),
+        }
 
 
 # Energy / money flow sensors built on data the cost coordinator already has.
