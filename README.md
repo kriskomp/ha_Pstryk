@@ -7,7 +7,7 @@ Użyj mojego kodu 1ML2X7 w koszyku w aplikacji. Bonus trafi do Twojego Portfela 
 !!! Dedykowana Karta do integracji (autora oryginału):
 https://github.com/balgerion/ha_Pstryk_card
 
-[![Wersja](https://img.shields.io/badge/wersja-2.2.6-blue)](https://github.com/kriskomp/ha_Pstryk/)
+[![Wersja](https://img.shields.io/github/v/release/kriskomp/ha_Pstryk?label=wersja&color=blue)](https://github.com/kriskomp/ha_Pstryk/releases/latest)
 
 Integracja dla Home Assistant umożliwiająca śledzenie aktualnych cen energii elektrycznej oraz prognoz z platformy Pstryk.
 
