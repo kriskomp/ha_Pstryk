@@ -1,0 +1,169 @@
+alias: Pstryk – Arbitraż zaplanuj
+description: >-
+  Wykonawca arbitrażu: bierze plan z input_text.pstryk_sell_arbitraz_plan i dodaje
+  ładowanie do kalendarza (przez Twój skrypt kalendarz_dodaj_ladowanie), po czym
+  sprawdza, czy wydarzenie naprawdę powstało. Niczego nie dubluje, nie rusza
+  istniejących wydarzeń (przy kolizji nie dodaje i pisze, z czym koliduje), a gdy
+  okno już się zaczęło, skraca początek do "teraz". Falownikiem steruje dalej
+  wyłącznie kalendarz. Z polem podglad = true tylko pokazuje, co by zrobił.
+mode: single
+fields:
+  podglad:
+    description: >-
+      true = tylko powiadomienie z wyliczeniami (bez zapisu do kalendarza i bez zmiany planu)
+    example: true
+sequence:
+  - variables:
+      podglad_on: "{{ podglad | default(false) | bool(false) }}"
+      plan: "{{ states('input_text.pstryk_sell_arbitraz_plan').split(';') }}"
+      plan_ok: "{{ (plan | count) >= 9 and plan[0] != 'brak' and plan[0][:2] == '20' }}"
+      st: "{{ plan[7] if plan_ok else '' }}"
+      start_dt: "{{ plan[0] if plan_ok else '' }}"
+      end_dt: "{{ plan[1] if plan_ok else '' }}"
+      moc_w: "{{ plan[2] | int(0) if plan_ok else 0 }}"
+      energia_kwh: "{{ plan[3] if plan_ok else '' }}"
+      teraz_ts: "{{ now().timestamp() }}"
+      start_ts: "{{ as_local(as_datetime(start_dt)).timestamp() if plan_ok else 0 }}"
+      end_ts: "{{ as_local(as_datetime(end_dt)).timestamp() if plan_ok else 0 }}"
+      start_eff: >-
+        {{ (now() + timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:00') if (plan_ok and start_ts < teraz_ts) else start_dt }}
+  # 1. Czy jest co planować
+  - if:
+      - condition: template
+        value_template: "{{ not plan_ok }}"
+    then:
+      - action: notify.mobile_app_pixel_9a
+        data:
+          title: Arbitraż – brak planu
+          message: Nie ma planu ładowania do zapisania. Przelicz plan na dashboardzie.
+          data:
+            tag: pstryk_arbitraz
+      - stop: Brak planu
+  - if:
+      - condition: template
+        value_template: "{{ st == 'z' and not podglad_on }}"
+    then:
+      - action: notify.mobile_app_pixel_9a
+        data:
+          title: Arbitraż – już zaplanowano
+          message: >-
+            Ładowanie {{ as_datetime(start_dt).strftime('%d.%m.%Y %H:%M') }} - {{ as_datetime(end_dt).strftime('%H:%M') }}
+            jest już w kalendarzu, niczego nie dodaję drugi raz.
+          data:
+            tag: pstryk_arbitraz
+      - stop: Już zaplanowano
+  # 2. Okno minęło (zostaje mniej niż 10 minut)
+  - if:
+      - condition: template
+        value_template: "{{ end_ts - teraz_ts < 600 }}"
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ not podglad_on }}"
+        then:
+          - action: input_text.set_value
+            target:
+              entity_id: input_text.pstryk_sell_arbitraz_plan
+            data:
+              value: "{{ (plan[:7] + ['w'] + plan[8:]) | join(';') }}"
+      - action: notify.mobile_app_pixel_9a
+        data:
+          title: Arbitraż – okno minęło
+          message: Okno ładowania {{ as_datetime(start_dt).strftime('%d.%m.%Y %H:%M') }} - {{ as_datetime(end_dt).strftime('%H:%M') }} już minęło, nic nie dodaję.
+          data:
+            tag: pstryk_arbitraz
+      - stop: Okno minęło
+  # 3. Kolizje z kalendarzami magazynu
+  - action: calendar.get_events
+    target:
+      entity_id:
+        - calendar.ladowanie_magazynu
+        - calendar.rozladowanie_magazynu
+        - calendar.feed_in_magazynu
+    data:
+      start_date_time: "{{ start_eff }}"
+      end_date_time: "{{ end_dt }}"
+    response_variable: kal
+  - variables:
+      s_ts: "{{ as_local(as_datetime(start_eff)).timestamp() }}"
+      konflikty: |-
+        {%- set k = namespace(a=[]) -%}
+        {%- for cal in ['calendar.ladowanie_magazynu', 'calendar.rozladowanie_magazynu', 'calendar.feed_in_magazynu'] -%}
+          {%- for ev in kal.get(cal, {}).get('events', []) -%}
+            {%- set es = as_local(as_datetime(ev.start)).timestamp() -%}
+            {%- set ee = as_local(as_datetime(ev.end)).timestamp() -%}
+            {%- if es < end_ts and ee > s_ts and not (cal == 'calendar.ladowanie_magazynu' and es == s_ts and ee == end_ts) -%}
+              {%- set k.a = k.a + [(ev.summary | default('wydarzenie')) ~ ' ' ~ as_local(as_datetime(ev.start)).strftime('%d.%m %H:%M') ~ '-' ~ as_local(as_datetime(ev.end)).strftime('%H:%M')] -%}
+            {%- endif -%}
+          {%- endfor -%}
+        {%- endfor -%}
+        {{ k.a | join('; ') }}
+  - if:
+      - condition: template
+        value_template: "{{ konflikty != '' }}"
+    then:
+      - action: notify.mobile_app_pixel_9a
+        data:
+          title: Arbitraż – kolizja z kalendarzem
+          message: >-
+            Nie dodałem ładowania {{ start_eff[11:16] }}-{{ end_dt[11:16] }}, bo koliduje z: {{ konflikty }}.
+            Usuń lub przesuń wydarzenie i przelicz plan.
+          data:
+            tag: pstryk_arbitraz
+      - stop: Kolizja z kalendarzem
+  # 4. Podgląd
+  - if:
+      - condition: template
+        value_template: "{{ podglad_on }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: PODGLĄD arbitrażu
+          message: >-
+            Dodałbym do kalendarza ładowania: {{ as_datetime(start_eff).strftime('%d.%m.%Y %H:%M') }} - {{ as_datetime(end_dt).strftime('%H:%M') }},
+            moc {{ moc_w }} W, ok. {{ energia_kwh }} kWh do baterii.
+            Status planu: {{ st }}. Kolizji brak.
+      - stop: Podgląd - bez zapisu do kalendarza
+  # 5. Zapis przez Twój skrypt kalendarza
+  - action: script.kalendarz_dodaj_ladowanie
+    data:
+      start: "{{ start_eff }}"
+      koniec: "{{ end_dt }}"
+      moc: "{{ moc_w }}"
+  # 6. Sprawdzenie, czy wydarzenie powstało
+  - action: calendar.get_events
+    target:
+      entity_id: calendar.ladowanie_magazynu
+    data:
+      start_date_time: "{{ start_eff }}"
+      end_date_time: "{{ end_dt }}"
+    response_variable: po
+  - variables:
+      jest: >-
+        {% set ns = namespace(f=false) %}{% for ev in po.get('calendar.ladowanie_magazynu', {}).get('events', []) %}{% if as_local(as_datetime(ev.start)).timestamp() == s_ts and as_local(as_datetime(ev.end)).timestamp() == end_ts and ('MOC:-' ~ moc_w) in (ev.description | default('')) %}{% set ns.f = true %}{% endif %}{% endfor %}{{ ns.f }}
+  - if:
+      - condition: template
+        value_template: "{{ jest }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.pstryk_sell_arbitraz_plan
+        data:
+          value: "{{ ([start_eff] + plan[1:7] + ['z'] + plan[8:]) | join(';') }}"
+      - action: notify.mobile_app_pixel_9a
+        data:
+          title: Arbitraż – zaplanowano ładowanie
+          message: >-
+            {{ as_datetime(start_eff).strftime('%d.%m.%Y %H:%M') }} - {{ as_datetime(end_dt).strftime('%H:%M') }}, {{ moc_w }} W,
+            ok. {{ energia_kwh }} kWh do baterii. Wydarzenie jest w kalendarzu ładowania.
+          data:
+            tag: pstryk_arbitraz
+    else:
+      - action: notify.mobile_app_pixel_9a
+        data:
+          title: Arbitraż – NIE dodano ładowania
+          message: >-
+            Skrypt kalendarza nie utworzył wydarzenia {{ start_eff[11:16] }}-{{ end_dt[11:16] }} ({{ moc_w }} W).
+            Sprawdź skrypt Kalendarz – Dodaj ładowanie i spróbuj ponownie.
+          data:
+            tag: pstryk_arbitraz

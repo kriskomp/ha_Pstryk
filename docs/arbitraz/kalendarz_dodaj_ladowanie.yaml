@@ -1,0 +1,80 @@
+alias: Kalendarz – Dodaj ładowanie
+description: Dodaje ładowanie do kalendarza. Bez parametrów działa jak dotąd, z pomocników
+  (magazyn_start_ladowania, magazyn_koniec_ladowania, magazyn_moc_ladowania). Opcjonalne
+  pola start, koniec i moc pozwalają wywołać skrypt z automatyzacji bez ruszania pomocników.
+  Koniec może wypadać w kolejnym dniu (okno przez północ).
+fields:
+  start:
+    description: Początek RRRR-MM-DD GG:MM:SS (puste = pomocnik magazyn_start_ladowania)
+    example: '2026-11-04 02:00:00'
+  koniec:
+    description: Koniec RRRR-MM-DD GG:MM:SS (puste = pomocnik magazyn_koniec_ladowania)
+    example: '2026-11-04 04:30:00'
+  moc:
+    description: Moc ładowania w W, wartość dodatnia (puste = pomocnik magazyn_moc_ladowania)
+    example: 3500
+sequence:
+- variables:
+    start_dt: '{{ (start | default('''', true)) or states(''input_datetime.magazyn_start_ladowania'') }}'
+    dzien: '{{ start_dt.split('' '')[0] }}'
+    godzina_koniec: '{{ states(''input_datetime.magazyn_koniec_ladowania'').split(''
+      '')[1] }}'
+    data_koniec_pomocnika: '{{ states(''input_datetime.magazyn_koniec_ladowania'').split('' '')[0] }}'
+    end_dt: '{% if koniec | default('''', true) %}{{ koniec }}{% elif data_koniec_pomocnika > dzien %}{{ data_koniec_pomocnika }} {{ godzina_koniec }}{% else %}{{ dzien }} {{ godzina_koniec }}{% endif %}'
+    dzien_koniec: '{{ end_dt.split('' '')[0] }}'
+    moc_w: '{{ ((moc | float(0)) if (moc is defined and moc) else (states(''input_number.magazyn_moc_ladowania'') | float(5000))) |
+      abs | round(0) | int }}'
+- condition: template
+  value_template: '{{ as_datetime(end_dt) | as_timestamp > as_datetime(start_dt)
+    | as_timestamp }}'
+- action: calendar.get_events
+  target:
+    entity_id: calendar.ladowanie_magazynu
+  data:
+    start_date_time: '{{ dzien }} 00:00:00'
+    end_date_time: '{{ dzien_koniec }} 23:59:59'
+  response_variable: istniejace
+- variables:
+    nowy_start_ts: '{{ as_datetime(start_dt) | as_timestamp }}'
+    nowy_koniec_ts: '{{ as_datetime(end_dt) | as_timestamp }}'
+    plan: "{% set ns = namespace(status='nowe', uid='') %} {% for ev in istniejace['calendar.ladowanie_magazynu']['events']
+      %}\n  {% set ev_start_ts = as_datetime(ev.start) | as_timestamp %}\n  {% set
+      ev_koniec_ts = as_datetime(ev.end) | as_timestamp %}\n  {% if ev_start_ts
+      == nowy_start_ts and ev_koniec_ts == nowy_koniec_ts %}\n    {% set opis =
+      ev.description | default('') %}\n    {% set ev_moc = (opis.split('MOC:')[1].split()[0]
+      | int(0)) if 'MOC:' in opis else none %}\n    {% if ev_moc is not none and
+      ev_moc == (moc_w * -1) %}\n      {% set ns.status = 'identyczne' %}\n    {%
+      else %}\n      {% set ns.status = 'nadpisz' %}\n      {% set ns.uid = ev.uid
+      %}\n    {% endif %}\n  {% endif %}\n{% endfor %} {{ ns.status }};{{ ns.uid
+      }}"
+- variables:
+    plan_status: '{{ plan.split('';'')[0] }}'
+    plan_uid: '{{ plan.split('';'')[1] }}'
+- if:
+  - condition: template
+    value_template: '{{ plan_status == ''identyczne'' }}'
+  then:
+  - stop: Identyczne wydarzenie (te same godziny i moc) już istnieje
+- if:
+  - condition: template
+    value_template: '{{ plan_status == ''nadpisz'' and plan_uid != '''' }}'
+  then:
+  - action: calendar.delete_event
+    target:
+      entity_id: calendar.ladowanie_magazynu
+    data:
+      uid: '{{ plan_uid }}'
+- action: calendar.create_event
+  target:
+    entity_id: calendar.ladowanie_magazynu
+  data:
+    summary: Ładowanie
+    description: MOC:-{{ moc_w }}
+    start_date_time: '{{ start_dt }}'
+    end_date_time: '{{ end_dt }}'
+- action: automation.trigger
+  target:
+    entity_id: automation.solax_wymus_zgodnosc_trybu_z_kalendarzem
+  data:
+    skip_condition: false
+mode: single

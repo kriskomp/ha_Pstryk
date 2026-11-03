@@ -1,0 +1,108 @@
+alias: Pstryk – Arbitraż koordynator
+description: >-
+  Po publikacji cen na kolejny dzień (event.pstryk_next_day_prices) woła planistę
+  (script.pstryk_arbitraz_plan), zapisuje wynik w input_text.pstryk_sell_arbitraz_plan
+  i, gdy jest okazja, wysyła powiadomienie z przyciskami "Zaplanuj ładowanie" i "Pomiń".
+  Przycisk "Zaplanuj" uruchamia script.pstryk_arbitraz_zaplanuj (ładowanie trafia do
+  kalendarza). Ręczne uruchomienie tej automatyzacji (np. z dashboardu) przelicza plan
+  na jutro i zawsze odpowiada powiadomieniem, także gdy okazji nie ma.
+mode: queued
+max: 5
+max_exceeded: silent
+triggers:
+  - trigger: state
+    entity_id: event.pstryk_next_day_prices
+    not_to:
+      - unavailable
+      - unknown
+    id: opublikowano
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: PSTRYK_ARB_ZAPLANUJ
+    id: zaplanuj
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: PSTRYK_ARB_POMIN
+    id: pomin
+conditions: []
+actions:
+  - choose:
+      # --- przycisk "Zaplanuj ładowanie" w powiadomieniu ---
+      - conditions:
+          - condition: trigger
+            id: zaplanuj
+        sequence:
+          - action: script.pstryk_arbitraz_zaplanuj
+            data:
+              podglad: false
+      # --- przycisk "Pomiń" ---
+      - conditions:
+          - condition: trigger
+            id: pomin
+        sequence:
+          - variables:
+              plan: "{{ states('input_text.pstryk_sell_arbitraz_plan').split(';') }}"
+          - if:
+              - condition: template
+                value_template: "{{ (plan | count) >= 9 and plan[7] == 'n' }}"
+            then:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.pstryk_sell_arbitraz_plan
+                data:
+                  value: "{{ (plan[:7] + ['p'] + plan[8:]) | join(';') }}"
+          - action: notify.mobile_app_pixel_9a
+            data:
+              message: clear_notification
+              data:
+                tag: pstryk_arbitraz
+    # --- publikacja cen albo ręczne uruchomienie: policz plan ---
+    default:
+      - variables:
+          reczne: "{{ trigger.id | default('reczne') not in ['opublikowano'] }}"
+          atrybuty: "{{ trigger.to_state.attributes if (not reczne and trigger.to_state is not none) else {} }}"
+      # Ochrona przed fałszywym wyzwoleniem po restarcie: liczy się tylko świeże zdarzenie "published"
+      - condition: template
+        value_template: >-
+          {{ reczne or (atrybuty.get('event_type') == 'published'
+             and (now() - as_datetime(atrybuty.get('published_at', '2000-01-01T00:00:00+00:00'))).total_seconds() < 600) }}
+      - action: script.pstryk_arbitraz_plan
+        data:
+          dzien: "{{ atrybuty.get('prices_for', '') if not reczne else '' }}"
+        response_variable: plan
+      # Plan zawsze trafia do pomocnika (dashboard pokazuje też powód braku planu)
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.pstryk_sell_arbitraz_plan
+        data:
+          value: "{{ plan.zapis }}"
+      - if:
+          - condition: template
+            value_template: "{{ plan.ok }}"
+        then:
+          - action: notify.mobile_app_pixel_9a
+            data:
+              title: "{{ plan.tytul }}"
+              message: "{{ plan.tekst }}"
+              data:
+                tag: pstryk_arbitraz
+                channel: Arbitraż
+                importance: high
+                actions: >-
+                  {{ [] if plan.kolizja else [
+                    {'action': 'PSTRYK_ARB_ZAPLANUJ', 'title': 'Zaplanuj ładowanie'},
+                    {'action': 'PSTRYK_ARB_POMIN', 'title': 'Pomiń'}] }}
+        else:
+          - if:
+              - condition: template
+                value_template: "{{ reczne }}"
+            then:
+              - action: notify.mobile_app_pixel_9a
+                data:
+                  title: "{{ plan.tytul }}"
+                  message: "{{ plan.tekst }}"
+                  data:
+                    tag: pstryk_arbitraz
+                    channel: Arbitraż

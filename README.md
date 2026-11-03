@@ -295,6 +295,10 @@ Warunek `last_triggered` jest zabezpieczeniem, a nie wymogiem: samo zdarzenie pr
 
 Przykład wygenerujesz też na bieżąco: opisz asystentowi (np. Claude), co ma robić powiadomienie, podając nazwy encji z tej sekcji, a dostaniesz gotowy YAML do wklejenia w edytorze automatyzacji.
 
+### Arbitraż cenowy magazynu energii (przykład, nie część integracji)
+
+Po zdarzeniu `event.pstryk_next_day_prices` można policzyć, czy jutro opłaca się kupić energię do baterii taniej i sprzedać ją później z zyskiem (np. co najmniej 1,00 zł/kWh po stratach), dostać powiadomienie z oknem zakupu, mocą, ilością energii i szacowanym zyskiem, a jednym przyciskiem dodać ładowanie do kalendarza magazynu. W katalogu [`docs/arbitraz`](docs/arbitraz/README.md) są gotowe do wklejenia w edytorze YAML skrypty, automatyzacja i karta dashboardu (dla SolaX sterowanego kalendarzami), razem z opisem założeń, testem krok po kroku i listą tego, czego ten etap nie robi. Planowane jest tylko ładowanie; sprzedaż jest w powiadomieniu informacją.
+
 ### Ponawianie zapytań
 
 W opcjach (*Konfiguruj*) i przy pierwszej konfiguracji: **liczba prób** na jedno zapytanie (z pierwszą) i **opóźnienie** między próbami. Domyślnie 2 próby co 30 s, maksymalnie 3. Każda próba zużywa jedno z 3 zapytań na godzinę, więc więcej niż 3 nie ma sensu, a przy awarii API kolejne próby tylko zjadają limit. Zapisana wcześniej wartość większa niż 3 (stary domyślny wybór 5) jest używana jako 3; w *Konfiguruj* można ją ustawić ręcznie na 2.

@@ -6,6 +6,21 @@ Wersje do 2.1.4 włącznie: [oryginał balgerion/ha_Pstryk](https://github.com/b
 
 Kod polecający Pstryk: **1ML2X7**.
 
+## Bez nowej wersji (dokumentacja i przykłady)
+
+- **Arbitraż cenowy magazynu energii, etap 1: ładowanie (`docs/arbitraz`).** Gotowe do wklejenia w interfejsie
+  Home Assistanta (nie część integracji): planista (`script.pstryk_arbitraz_plan`), koordynator
+  (`automation.pstryk_arbitraz_koordynator`, wyzwalany zdarzeniem `event.pstryk_next_day_prices`), wykonawca
+  (`script.pstryk_arbitraz_zaplanuj`, z trybem „podgląd”), karta dashboardu i poprawiony skrypt
+  `Kalendarz – Dodaj ładowanie` (okno może przechodzić przez północ, opcjonalne pola `start`, `koniec`, `moc`;
+  bez nich działa jak dotąd). Powiadomienie z przyciskami „Zaplanuj ładowanie” i „Pomiń” pojawia się tylko, gdy
+  jest okazja (zysk co najmniej 1,00 zł/kWh po stratach x1,24). Ilość energii: wolne miejsce do 95% minus połowa
+  prognozy Solcast. Plan trzyma jeden pomocnik tekstowy `input_text.pstryk_sell_arbitraz_plan`. Sprzedaż jest
+  w powiadomieniu tylko informacją. Opis założeń i ograniczeń: `docs/arbitraz/README.md`.
+- Testy szablonów tych skryptów (`tests/test_arbitrage_templates.py`) działają w symulatorze szablonów Jinja2;
+  do zależności testowych doszły `Jinja2` i `PyYAML`.
+- Sekcja README „Arbitraż cenowy magazynu energii” z odnośnikiem do opisu.
+
 ## 2.4.0
 
 - **Ujednolicenie identyfikatorów przejętych encji (opcjonalne, w opcjach integracji).** Przejęcie z Pstryk AiO

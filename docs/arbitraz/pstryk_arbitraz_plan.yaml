@@ -1,0 +1,236 @@
+alias: Pstryk – Arbitraż plan
+description: >-
+  Planista arbitrażu (bez skutków ubocznych, niczego nie zapisuje i nie włącza).
+  Z cen kupna i sprzedaży na dany dzień (domyślnie jutro) wyznacza okno zakupu
+  energii do baterii (kupno taniej, sprzedaż później z zyskiem co najmniej
+  `marza_zl` po uwzględnieniu strat), ilość energii wg wolnego miejsca w baterii
+  pomniejszonego o część prognozy PV, moc ładowania i szacowany zysk. Zwraca
+  słownik (response_variable): ok, powod, start, koniec, moc_w, energia_kwh,
+  tytul, tekst, zapis, kolizja i inne. Parametry są w pierwszym kroku `variables`.
+mode: single
+fields:
+  dzien:
+    description: >-
+      Dzień planu RRRR-MM-DD. Puste = jutro.
+    example: '2026-11-04'
+sequence:
+  - variables:
+      # ---------- PARAMETRY (jedyne miejsce do zmiany) ----------
+      wsp_strat: 1.24          # mnożnik ceny zakupu: straty ładowania i rozładowania (0,873 x 0,925)
+      marza_zl: 1.0            # minimalny zysk na sprzedanej kWh, po stratach [zł/kWh]
+      spr_ladowania: 0.873     # sprawność sieć -> bateria (z falownika)
+      spr_rozladowania: 0.925  # sprawność bateria -> sieć (z falownika)
+      max_soc: 95              # do ilu % ładujemy w arbitrażu
+      udzial_pv: 0.5           # jaką część jutrzejszej prognozy Solcast odejmujemy od miejsca w baterii
+      min_kwh: 1.0             # poniżej tej ilości energii nie planujemy ładowania
+      moc_max_w: 11000         # górny limit mocy ładowania [W]
+      # ---------- DANE Z ENCJI ----------
+      dz: "{{ dzien | default((now() + timedelta(days=1)).strftime('%Y-%m-%d'), true) }}"
+      dzis: "{{ now().strftime('%Y-%m-%d') }}"
+      moc_min_w: "{{ state_attr('input_number.magazyn_moc_ladowania', 'min') | float(1000) }}"
+      moc_krok_w: "{{ state_attr('input_number.magazyn_moc_ladowania', 'step') | float(500) }}"
+      moc_gora_w: "{{ [state_attr('input_number.magazyn_moc_ladowania', 'max') | float(moc_max_w), moc_max_w] | min }}"
+      limit_eksportu_kw: "{{ states('number.solax_inverter_export_limit') | float(12000) / 1000 }}"
+      pojemnosc_kwh: "{{ states('sensor.solax_inverter_battery_system_installed_capacity') | float(0) / 1000 }}"
+      soc: "{{ states('sensor.solax_inverter_battery_soc') | float(-1) }}"
+      energia_teraz_kwh: "{{ states('sensor.solax_inverter_battery_energy') | float(-1) }}"
+      min_soc: "{{ states('input_number.solax_discharge_min_soc') | float(12) }}"
+      pv_kwh: "{{ states('sensor.solcast_pv_forecast_prognoza_na_dzisiaj' if dz == dzis else 'sensor.solcast_pv_forecast_prognoza_na_jutro') | float(0) }}"
+  - action: calendar.get_events
+    target:
+      entity_id:
+        - calendar.ladowanie_magazynu
+        - calendar.rozladowanie_magazynu
+        - calendar.feed_in_magazynu
+    data:
+      start_date_time: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      end_date_time: "{{ dz }} 23:59:59"
+    response_variable: kal
+    continue_on_error: true
+  - variables:
+      wynik: |-
+        {%- macro pl(x, n=2) -%}{{ (('%.' ~ n ~ 'f') | format(x | float(0))) | replace('.', ',') }}{%- endmacro -%}
+        {%- set f = wsp_strat | float -%}
+        {%- set eps = 0.000001 -%}
+        {%- set kupno = (state_attr('sensor.pstryk_json_buy', 'prices_today') or []) + (state_attr('sensor.pstryk_json_buy', 'prices_tomorrow') or []) -%}
+        {%- set sprz = (state_attr('sensor.pstryk_json_sell', 'prices_today') or []) + (state_attr('sensor.pstryk_json_sell', 'prices_tomorrow') or []) -%}
+        {#- 1. Ceny godzinowe wybranego dnia (gdy są kwadranse, uśrednione do godziny) -#}
+        {%- set B = namespace(v=[]) -%}
+        {%- set S = namespace(v=[]) -%}
+        {%- for h in range(24) -%}
+          {%- set xb = namespace(a=[]) -%}
+          {%- set xs = namespace(a=[]) -%}
+          {%- for it in kupno -%}
+            {%- set t = as_local(as_datetime(it.time)) -%}
+            {%- if t.strftime('%Y-%m-%d') == dz and t.hour == h -%}{%- set xb.a = xb.a + [it.price | float(0)] -%}{%- endif -%}
+          {%- endfor -%}
+          {%- for it in sprz -%}
+            {%- set t = as_local(as_datetime(it.time)) -%}
+            {%- if t.strftime('%Y-%m-%d') == dz and t.hour == h -%}{%- set xs.a = xs.a + [it.price | float(0)] -%}{%- endif -%}
+          {%- endfor -%}
+          {%- set B.v = B.v + [(xb.a | sum / (xb.a | count)) if xb.a else none] -%}
+          {%- set S.v = S.v + [(xs.a | sum / (xs.a | count)) if xs.a else none] -%}
+        {%- endfor -%}
+        {#- 2. Które godziny zakupu się opłacają (zysk >= marża względem najlepszej późniejszej sprzedaży) -#}
+        {%- set Q = namespace(ok=[], hmin=none, cmin=none, bp=none, bb=none, bs=none) -%}
+        {%- for h in range(24) -%}
+          {%- set lm = namespace(m=none, k=none) -%}
+          {%- for k in range(h + 1, 24) -%}
+            {%- if S.v[k] is not none and (lm.m is none or S.v[k] > lm.m) -%}{%- set lm.m = S.v[k] -%}{%- set lm.k = k -%}{%- endif -%}
+          {%- endfor -%}
+          {%- set zysk = (lm.m - B.v[h] * f) if (B.v[h] is not none and lm.m is not none) else none -%}
+          {%- set oplaca = zysk is not none and zysk >= marza_zl - eps -%}
+          {%- set Q.ok = Q.ok + [oplaca] -%}
+          {%- if zysk is not none and (Q.bp is none or zysk > Q.bp) -%}{%- set Q.bp = zysk -%}{%- set Q.bb = h -%}{%- set Q.bs = lm.k -%}{%- endif -%}
+          {%- if oplaca and (Q.cmin is none or B.v[h] < Q.cmin) -%}{%- set Q.cmin = B.v[h] -%}{%- set Q.hmin = h -%}{%- endif -%}
+        {%- endfor -%}
+        {#- 3. Ciągły przedział opłacalnych godzin wokół najtańszej -#}
+        {%- set W = namespace(a=Q.hmin, b=Q.hmin) -%}
+        {%- if Q.hmin is not none -%}
+          {%- for i in range(24) -%}
+            {%- if W.a > 0 and Q.ok[W.a - 1] -%}{%- set W.a = W.a - 1 -%}{%- endif -%}
+            {%- if W.b < 23 and Q.ok[W.b + 1] -%}{%- set W.b = W.b + 1 -%}{%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+        {%- set n = (W.b - W.a + 1) if Q.hmin is not none else 0 -%}
+        {#- 4. Bateria i ilość energii -#}
+        {%- set cap = pojemnosc_kwh | float(0) -%}
+        {%- set e_teraz = energia_teraz_kwh if energia_teraz_kwh >= 0 else ((cap * soc / 100) if soc >= 0 else -1) -%}
+        {%- set t0 = as_local(as_datetime(dz ~ ' 00:00:00')) -%}
+        {%- set kal_ = kal | default({}) -%}
+        {%- set RP = namespace(n=0) -%}
+        {%- if Q.hmin is not none -%}
+          {%- set okno_ts = (t0 + timedelta(hours=W.a)).timestamp() -%}
+          {%- for ev in kal_.get('calendar.rozladowanie_magazynu', {}).get('events', []) -%}
+            {%- if as_local(as_datetime(ev.end)).timestamp() <= okno_ts + 1 -%}{%- set RP.n = RP.n + 1 -%}{%- endif -%}
+          {%- endfor -%}
+        {%- endif -%}
+        {%- set e_start = e_teraz if RP.n == 0 else ([e_teraz, cap * min_soc / 100] | min) -%}
+        {%- set miejsce = [cap * max_soc / 100 - e_start, 0] | max -%}
+        {%- set pv_odl = pv_kwh * udzial_pv -%}
+        {%- set cel = (((miejsce - pv_odl) * 10) | int) / 10 -%}
+        {%- set R = namespace(powod='') -%}
+        {%- if (B.v | reject('none') | list | count) == 0 or (S.v | reject('none') | list | count) == 0 -%}
+          {%- set R.powod = 'Brak cen kupna/sprzedaży na ' ~ dz -%}
+        {%- elif Q.hmin is none -%}
+          {%- set R.powod = 'Brak okazji. Najlepszy zysk ' ~ pl(Q.bp) ~ ' zł/kWh (kupno ' ~ '%02d:00' | format(Q.bb) ~ ', sprzedaż ' ~ '%02d:00' | format(Q.bs) ~ ') przy progu ' ~ pl(marza_zl) ~ ' zł/kWh.' if Q.bp is not none else 'Brak okazji: żadna godzina sprzedaży nie leży po godzinie zakupu.' -%}
+        {%- elif cap <= 0 or e_teraz < 0 -%}
+          {%- set R.powod = 'Brak danych baterii (pojemność, SOC).' -%}
+        {%- elif cel < min_kwh -%}
+          {%- set R.powod = 'Okazja jest, ale bateria nie ma miejsca: wolne ' ~ pl(miejsce, 1) ~ ' kWh do ' ~ max_soc ~ '%, prognoza PV odlicza ' ~ pl(pv_odl, 1) ~ ' kWh (zostaje ' ~ pl(cel, 1) ~ ' kWh).' -%}
+        {%- endif -%}
+        {#- 5. Moc, czas trwania, najtańsze położenie w oknie -#}
+        {%- set P = namespace(w=0, cel=cel, dur=0, ogr=false) -%}
+        {%- set C = namespace(k=none, avg=none) -%}
+        {%- if not R.powod -%}
+          {%- set p_pot = cel / n * 1000 -%}
+          {%- set P.w = [[((p_pot / moc_krok_w) | round(0, 'ceil')) * moc_krok_w, moc_min_w] | max, moc_gora_w] | min -%}
+          {%- if P.w * n / 1000 < cel - 0.0001 -%}{%- set P.ogr = true -%}{%- set P.cel = (((P.w * n / 1000) * 10) | int) / 10 -%}{%- endif -%}
+          {%- set P.dur = [(((P.cel / (P.w / 1000)) * 60 / 5) | round(0, 'ceil') * 5) | int, n * 60] | min -%}
+          {%- for k in range(W.a, W.b + 1) -%}
+            {%- if k * 60 + P.dur <= (W.b + 1) * 60 -%}
+              {%- set A = namespace(w=0, c=0) -%}
+              {%- for j in range(k, W.b + 1) -%}
+                {%- set ov = ([k * 60 + P.dur, (j + 1) * 60] | min) - ([k * 60, j * 60] | max) -%}
+                {%- if ov > 0 -%}{%- set A.w = A.w + ov -%}{%- set A.c = A.c + ov * B.v[j] -%}{%- endif -%}
+              {%- endfor -%}
+              {%- set avg = A.c / A.w -%}
+              {%- set s0 = (k * 60 + P.dur + 59) // 60 -%}
+              {%- set SN = namespace(n=0) -%}
+              {%- for s in range(s0, 24) -%}
+                {%- if S.v[s] is not none and S.v[s] - avg * f >= marza_zl - eps -%}{%- set SN.n = SN.n + 1 -%}{%- endif -%}
+              {%- endfor -%}
+              {%- if SN.n > 0 and (C.avg is none or avg < C.avg - 0.000001) -%}{%- set C.k = k -%}{%- set C.avg = avg -%}{%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- if C.k is none -%}{%- set R.powod = 'Okazja jest, ale po oknie zakupu nie ma już opłacalnej godziny sprzedaży.' -%}{%- endif -%}
+        {%- endif -%}
+        {#- 6. Okno sprzedaży (informacyjnie), zysk, kolizje, teksty -#}
+        {%- set SL = namespace(a=[]) -%}
+        {%- set top = [] -%}
+        {%- set sr_cena = 0 -%}
+        {%- set sprzedane = 0 -%}
+        {%- set start_dt = '' -%}
+        {%- set end_dt = '' -%}
+        {%- set kol = namespace(a=[]) -%}
+        {%- if not R.powod -%}
+          {%- set s0 = (C.k * 60 + P.dur + 59) // 60 -%}
+          {%- for s in range(s0, 24) -%}
+            {%- if S.v[s] is not none and S.v[s] - C.avg * f >= marza_zl - eps -%}{%- set SL.a = SL.a + [{'h': s, 'p': S.v[s]}] -%}{%- endif -%}
+          {%- endfor -%}
+          {%- set sprzedane = P.cel * spr_rozladowania -%}
+          {%- set ks = [[(sprzedane / limit_eksportu_kw) | round(0, 'ceil') | int, 1] | max, SL.a | count] | min -%}
+          {%- set top = (SL.a | sort(attribute='p', reverse=true) | list)[:ks] | sort(attribute='h') | list -%}
+          {%- set sr_cena = (top | sum(attribute='p')) / (top | count) -%}
+          {%- set start_o = t0 + timedelta(minutes=C.k * 60) -%}
+          {%- set end_o = start_o + timedelta(minutes=P.dur) -%}
+          {%- set start_dt = start_o.strftime('%Y-%m-%d %H:%M:%S') -%}
+          {%- set end_dt = end_o.strftime('%Y-%m-%d %H:%M:%S') -%}
+          {%- for cal in ['calendar.ladowanie_magazynu', 'calendar.rozladowanie_magazynu', 'calendar.feed_in_magazynu'] -%}
+            {%- for ev in kal_.get(cal, {}).get('events', []) -%}
+              {%- set es = as_local(as_datetime(ev.start)).timestamp() -%}
+              {%- set ee = as_local(as_datetime(ev.end)).timestamp() -%}
+              {%- if es < end_o.timestamp() and ee > start_o.timestamp() and not (cal == 'calendar.ladowanie_magazynu' and es == start_o.timestamp() and ee == end_o.timestamp()) -%}
+                {%- set kol.a = kol.a + [(ev.summary | default('wydarzenie')) ~ ' ' ~ as_local(as_datetime(ev.start)).strftime('%H:%M') ~ '-' ~ as_local(as_datetime(ev.end)).strftime('%H:%M')] -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endfor -%}
+        {%- endif -%}
+        {%- set RG = namespace(a=[]) -%}
+        {%- for it in top -%}
+          {%- if RG.a and RG.a[-1].e == it.h -%}
+            {%- set RG.a = RG.a[:-1] + [{'s': RG.a[-1].s, 'e': it.h + 1}] -%}
+          {%- else -%}
+            {%- set RG.a = RG.a + [{'s': it.h, 'e': it.h + 1}] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- set sprz_txt -%}{%- for r in RG.a -%}{{ '%02d:00-%02d:00' | format(r.s, r.e) }}{{ ', ' if not loop.last }}{%- endfor -%}{%- endset -%}
+        {%- set dz_pl = as_datetime(dz ~ ' 00:00:00').strftime('%d.%m.%Y') -%}
+        {%- if R.powod -%}
+          {{- {
+            'ok': false,
+            'powod': R.powod,
+            'dzien': dz,
+            'start': '', 'koniec': '', 'moc_w': 0, 'energia_kwh': 0,
+            'kolizja': '',
+            'tytul': 'Arbitraż ' ~ dz_pl ~ ': brak planu',
+            'tekst': R.powod,
+            'zapis': 'brak;' ~ dz ~ ';' ~ R.powod[:180] | replace(';', ',')
+          } -}}
+        {%- else -%}
+          {%- set zysk_kwh = sr_cena - C.avg * f -%}
+          {%- set zysk_zl = sprzedane * zysk_kwh -%}
+          {%- set pobor = P.cel / spr_ladowania -%}
+          {%- set tekst -%}
+            {{- 'Ceny na ' ~ dz_pl ~ ' pozwalają na arbitraż.' -}}
+            {{- '\nKupno (ładowanie): ' ~ start_o.strftime('%H:%M') ~ '-' ~ end_o.strftime('%H:%M') ~ ', ' ~ P.w | int ~ ' W, ' ~ pl(P.cel, 1) ~ ' kWh do baterii (z sieci ok. ' ~ pl(pobor, 1) ~ ' kWh), śr. ' ~ pl(C.avg) ~ ' zł/kWh' -}}
+            {{- '\nSprzedaż (informacyjnie): ' ~ sprz_txt ~ ', śr. ' ~ pl(sr_cena) ~ ' zł/kWh, ok. ' ~ pl(sprzedane, 1) ~ ' kWh' -}}
+            {{- '\nZysk: ok. ' ~ pl(zysk_kwh) ~ ' zł/kWh (po stratach x' ~ pl(f) ~ '), razem ok. ' ~ pl(zysk_zl, 1) ~ ' zł' -}}
+            {{- '\nBateria: ' ~ soc | round(0) | int ~ '% (' ~ pl(e_teraz, 1) ~ ' kWh), wolne do ' ~ max_soc ~ '%: ' ~ pl(miejsce, 1) ~ ' kWh, prognoza PV ' ~ pl(pv_kwh, 1) ~ ' kWh (odjęte ' ~ pl(pv_odl, 1) ~ ' kWh)' -}}
+            {{- ('\nUwaga: okno zakupu jest za krótkie na całą energię (limit ' ~ P.w | int ~ ' W).') if P.ogr else '' -}}
+            {{- ('\nUwaga: przed oknem jest planowane rozładowanie, liczę od minimalnego SOC.') if RP.n > 0 else '' -}}
+            {{- ('\nKOLIZJA z kalendarzem: ' ~ kol.a | join('; ') ~ '. Nie dodam ładowania.') if kol.a else '' -}}
+          {%- endset -%}
+          {{- {
+            'ok': true,
+            'powod': '',
+            'dzien': dz,
+            'start': start_dt,
+            'koniec': end_dt,
+            'moc_w': P.w | int,
+            'energia_kwh': P.cel | round(1),
+            'pobor_kwh': pobor | round(1),
+            'cena_zakupu': C.avg | round(2),
+            'sprzedaz': sprz_txt,
+            'cena_sprzedazy': sr_cena | round(2),
+            'sprzedane_kwh': sprzedane | round(1),
+            'zysk_kwh': zysk_kwh | round(2),
+            'zysk_zl': zysk_zl | round(1),
+            'kolizja': kol.a | join('; '),
+            'tytul': 'Arbitraż ' ~ dz_pl ~ ': ładowanie ' ~ start_o.strftime('%H:%M') ~ '-' ~ end_o.strftime('%H:%M'),
+            'tekst': tekst,
+            'zapis': start_dt ~ ';' ~ end_dt ~ ';' ~ (P.w | int) ~ ';' ~ (P.cel | round(1)) ~ ';' ~ (C.avg | round(2)) ~ ';' ~ (sr_cena | round(2)) ~ ';' ~ (zysk_zl | round(1)) ~ ';n;' ~ sprz_txt | replace(', ', ',')
+          } -}}
+        {%- endif -%}
+  - stop: Plan wyliczony
+    response_variable: wynik

@@ -1,0 +1,52 @@
+type: vertical-stack
+cards:
+  - type: markdown
+    title: Arbitraż – plan ładowania
+    content: |-
+      {% set p = states('input_text.pstryk_sell_arbitraz_plan').split(';') %}
+      {%- if (p | count) >= 9 and p[0][:2] == '20' %}
+      {%- set stan = {'n': 'czeka na zatwierdzenie', 'z': 'zaplanowano w kalendarzu', 'p': 'pominięto', 'w': 'okno minęło'} %}
+      **Ładowanie {{ as_datetime(p[0]).strftime('%d.%m.%Y %H:%M') }} – {{ as_datetime(p[1]).strftime('%H:%M') }}**
+
+      Moc **{{ p[2] }} W**, do baterii **{{ ('%.1f' | format(p[3] | float(0))) | replace('.', ',') }} kWh**, średnia cena zakupu {{ ('%.2f' | format(p[4] | float(0))) | replace('.', ',') }} zł/kWh.
+
+      Sprzedaż (informacyjnie): {{ p[8] | replace(',', ', ') }}, średnio {{ ('%.2f' | format(p[5] | float(0))) | replace('.', ',') }} zł/kWh.
+
+      Szacowany zysk: **{{ ('%.1f' | format(p[6] | float(0))) | replace('.', ',') }} zł**.
+
+      Stan: **{{ stan.get(p[7], p[7]) }}**
+      {%- elif (p | count) >= 3 and p[0] == 'brak' %}
+      Brak planu na {{ as_datetime(p[1] ~ ' 00:00:00').strftime('%d.%m.%Y') }}: {{ p[2] }}
+      {%- else %}
+      Brak planu. Użyj „Przelicz plan”.
+      {%- endif %}
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Przelicz plan
+        icon: mdi:calculator-variant
+        tap_action:
+          action: perform-action
+          perform_action: automation.trigger
+          target:
+            entity_id: automation.pstryk_arbitraz_koordynator
+          data:
+            skip_condition: true
+      - type: button
+        name: Podgląd
+        icon: mdi:eye
+        tap_action:
+          action: perform-action
+          perform_action: script.pstryk_arbitraz_zaplanuj
+          data:
+            podglad: true
+      - type: button
+        name: Zaplanuj ładowanie
+        icon: mdi:battery-charging
+        tap_action:
+          action: perform-action
+          perform_action: script.pstryk_arbitraz_zaplanuj
+          data:
+            podglad: false
+          confirmation:
+            text: Dodać ładowanie z planu do kalendarza?
