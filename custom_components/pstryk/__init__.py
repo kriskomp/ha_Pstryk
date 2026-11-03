@@ -8,6 +8,7 @@ from homeassistant.helpers.translation import async_get_translations
 from .migrate import async_enable_integration_disabled, async_migrate_from_aio
 from .mqtt_publisher import PstrykMqttPublisher
 from .mqtt_common import setup_periodic_mqtt_publish
+from .publication import PublicationTracker
 from .const import (
     DOMAIN,
     CONF_AIO_ACTION,
@@ -22,7 +23,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "button"]
+PLATFORMS = ["sensor", "button", "event"]
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
@@ -57,6 +58,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not entry.update_listeners:
         entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     
+    # Before the platforms: the sensor, the event and the buy coordinator share it.
+    tracker = PublicationTracker(hass, entry.entry_id)
+    await tracker.async_load()
+    hass.data[DOMAIN][f"{entry.entry_id}_publication"] = tracker
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _LOGGER.debug("Pstryk entry setup: %s", entry.entry_id)
     

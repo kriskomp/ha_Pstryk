@@ -6,6 +6,40 @@ Wersje do 2.1.4 włącznie: [oryginał balgerion/ha_Pstryk](https://github.com/b
 
 Kod polecający Pstryk: **1ML2X7**.
 
+## 2.4.0
+
+- **Ujednolicenie identyfikatorów przejętych encji (opcjonalne, w opcjach integracji).** Przejęcie z Pstryk AiO
+  zostawia jego identyfikatory i polskie etykiety. Nowe pole *Konfiguruj → „Ujednolić identyfikatory encji”*
+  (widoczne tylko, gdy jest co zmieniać; domyślnie wyłączone) otwiera podgląd „stare → nowe” z oznaczeniem
+  kolizji i liczbą odwołań w automatyzacjach, skryptach i scenach. Wybór bez wartości domyślnej: zostaw / zmień
+  (tylko bez kolizji) / zmień także z kolizją (kasuje wyłącznie osierocone dane nowego identyfikatora; identyfikator
+  zajęty przez inną encję nigdy nie jest ruszany). Osobny przełącznik przywraca angielskie nazwy. Statystyki idą za
+  encją; Home Assistant nie poprawia odwołań w automatyzacjach i panelu Energia (opis w README). Nic nie jest
+  zmieniane automatycznie, kreator przejęcia działa jak dotąd.
+- **Kiedy Pstryk opublikował ceny na kolejny dzień (nowe encje).** Pstryk publikuje ceny na następny dzień po
+  12:00, raz o 12:05, raz o 14:00, a API nie podaje godziny publikacji. Integracja zapisuje teraz chwilę, w której
+  po raz pierwszy pobrała **komplet cen** na kolejny dzień (cena i `tge_price` dla każdej godziny doby: 23, 24
+  lub 25 godzin w dniach zmiany czasu; przed publikacją Pstryk wysyła wiersze z ceną `null`). Godzina jest
+  dokładna do 20 minut, bo ceny są sprawdzane o 12:05, 12:25, 12:45 itd. **Bez dodatkowych zapytań do API.**
+  - `sensor.pstryk_next_day_prices_published` (nazwa „Pstryk Next Day Prices Published”, `device_class:
+    timestamp`): godzina wykrycia. Jedna wartość na każdy dzień roku (365/366), pierwsze wykrycie dnia zostaje,
+    stan trzyma się do następnej publikacji, także po północy. Atrybuty: `prices_for` (`2026-11-04`),
+    `prices_for_display` (`04.11.2026`), `late` (ceny znalezione dopiero po północy dnia, którego dotyczą) i
+    `next_day_available`. Dostępny także przy awarii API.
+  - `event.pstryk_next_day_prices` (nazwa „Pstryk Next Day Prices”): zdarzenie `published` wysyłane **raz** na
+    każdy dzień, z atrybutami `prices_for`, `prices_for_display`, `published_at` i `late`. Do wyzwalania
+    automatyzacji, bez pomocników. Przykładowa automatyzacja z powiadomieniem jest w README (sekcja „Publikacja
+    cen na kolejny dzień”).
+  - **Restart, przeładowanie, aktualizacja:** zapis jest w `/config/.storage/pstryk_next_day_published` (razem z
+    identyfikatorem wpisu), więc nic się nie gubi i zdarzenie się nie powtarza. Gdy Home Assistant był wyłączony w
+    chwili publikacji, godziną wykrycia jest pierwsze pobranie po starcie, a zdarzenie idzie dopiero po pełnym
+    starcie (wcześniej automatyzacje nie nasłuchują). Zdarzenie dla minionego dnia nie jest wysyłane.
+  - **Pierwszy zapis po aktualizacji z 2.3.x jest cichy** (bez zdarzenia): ceny na jutro z pamięci dostają
+    godzinę swojego pobrania, a `late` jest puste. Pierwsze zdarzenie przyjdzie przy następnej publikacji.
+  - Diagnostyka ma nową sekcję `next_day_publication`.
+  - Nie zmienia się „Tomorrow prices available” (heurystyka co najmniej 20 godzin) ani nic w istniejących
+    encjach; komplet liczony jest osobną, ścisłą regułą.
+
 ## 2.3.1
 
 - **Zmiana czasu (zgłoszenie [#11](https://github.com/kriskomp/ha_Pstryk/issues/11)).** W dniu, w którym zegary

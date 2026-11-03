@@ -84,12 +84,14 @@
         "data": {
           "json_sensor_enabled": "Włącz sensory JSON z cenami",
           "prosumer_entities": "Encje sprzedaży (przychód, energia sprzedana, średnia cena sprzedaży)",
-          "take_over_aio": "Przejmij Pstryk AiO"
+          "take_over_aio": "Przejmij Pstryk AiO",
+          "unify_entity_ids": "Ujednolić identyfikatory encji (kolejny krok: podgląd i wybór)"
         },
         "data_description": {
           "json_sensor_enabled": "Dodaje sensory Pstryk Json Buy/Sell ze standardowymi atrybutami prices_today, prices_tomorrow i prices (kompatybilne z EV Smart Charging, cheapest-energy-hours itp.)",
           "prosumer_entities": "Dwanaście encji opisuje tylko sprzedaż energii. Bez sprzedaży zostają zerowe lub nieznane. Automatycznie: wyłączone, dopóki w danych Pstryk nie widać żadnej sprzedaży; po pierwszej sprzedaży włączane (z powiadomieniem), a Home Assistant dodaje je w ciągu ok. 30 sekund. Wartości biorą się z sum Pstryka, więc niczego potem nie brakuje",
-          "take_over_aio": "Otwiera kolejny krok: przeniesienie encji Pstryk AiO do tej integracji (z identyfikatorami, nazwami i historią)"
+          "take_over_aio": "Otwiera kolejny krok: przeniesienie encji Pstryk AiO do tej integracji (z identyfikatorami, nazwami i historią)",
+          "unify_entity_ids": "Przejęte encje Pstryk AiO mają jeszcze swoje stare identyfikatory. Otwiera podgląd zmiany na identyfikatory tej integracji; nic nie zmieni się bez Twojego wyboru"
         }
       },
       "price_settings": {
@@ -146,6 +148,17 @@
         "data_description": {
           "mode": "Co stanie się z wpisem Pstryk AiO po przeniesieniu jego encji"
         }
+      },
+      "unify_ids": {
+        "title": "Ujednolić identyfikatory encji",
+        "description": "Podgląd zmiany na identyfikatory tej integracji (w nawiasie liczba odwołań w automatyzacjach, skryptach i scenach):\n\n{preview}\n\n✓ wolne, można zmienić. ⚠ kolizja: pod nowym id zostały dane dawnej encji (statystyki, historia); „zmień także z kolizją” kasuje tylko te osierocone dane nowego id. ✖ nowe id zajmuje inna encja, tej nie zmienimy.\n\nHistoria długoterminowa (statystyki) przechodzi na nowe id razem z encją. Home Assistant nie poprawia odwołań w automatyzacjach, skryptach, scenach, kartach i panelu Energia: popraw je po zmianie. Zalecana kopia zapasowa. Odwołania w szablonach nie są wykrywane.\n\nEncji z nazwą nadaną w rejestrze: {named}.",
+        "data": {
+          "unify_mode": "Co zrobić z identyfikatorami",
+          "english_names": "Wróć do angielskich nazw"
+        },
+        "data_description": {
+          "english_names": "Usuwa nazwę zapisaną w rejestrze (np. polską etykietę AiO), więc encja dostaje nazwę z tej integracji. Dotyczy też nazw ustawionych ręcznie"
+        }
       }
     },
     "error": {
@@ -184,6 +197,13 @@
         "disable": "Przejmij i wyłącz Pstryk AiO (można go usunąć później)",
         "remove": "Przejmij i usuń Pstryk AiO",
         "fresh": "Nie przejmuj, skonfiguruj jako nową integrację"
+      }
+    },
+    "unify_mode": {
+      "options": {
+        "keep": "Zostaw identyfikatory bez zmian",
+        "change": "Zmień (tylko te bez kolizji)",
+        "change_all": "Zmień także z kolizją (kasuje osierocone dane nowego id)"
       }
     }
   }

@@ -88,8 +88,15 @@ class Registry:
         del self.entities[entity_id]
 
     def async_update_entity(self, entity_id, **kw):
+        new_id = kw.pop("new_entity_id", None)
         for key, value in kw.items():
             setattr(self.entities[entity_id], key, value)
+        if new_id is not None:
+            if new_id in self.entities:
+                raise ValueError(f"Entity with this ID is already registered: {new_id}")
+            entity = self.entities.pop(entity_id)
+            entity.entity_id = new_id
+            self.entities[new_id] = entity
 
     def async_update_entity_platform(self, entity_id, new_platform, *, new_config_entry_id,
                                      new_unique_id=None, new_device_id=None):
@@ -173,8 +180,26 @@ class Devices:
         return self.made[key]
 
 
+class States:
+    def __init__(self):
+        self.known = {}
+
+    def get(self, entity_id):
+        return self.known.get(entity_id)
+
+
+class Services:
+    def __init__(self):
+        self.calls = []
+
+    async def async_call(self, domain, service, data=None, blocking=False):
+        self.calls.append((domain, service, data))
+
+
 class Hass:
     def __init__(self):
+        self.states = States()
+        self.services = Services()
         self.registry = Registry()
         self.devices = Devices()
         self.config_entries = Manager(self.registry)
@@ -210,6 +235,16 @@ class _Flow:
 
     def _async_current_entries(self):
         return list(self.current_entries)
+
+
+class _NoTracker:
+    """The publication tracker is not under test here."""
+
+    def __init__(self, hass, entry_id):
+        pass
+
+    async def async_load(self):
+        pass
 
 
 def _stubs(hass_holder):
@@ -274,6 +309,7 @@ def _stubs(hass_holder):
         "pstryk.api_client": _mod("pstryk.api_client", async_validate_api_key=None),
         "pstryk.mqtt_publisher": _mod("pstryk.mqtt_publisher", PstrykMqttPublisher=object),
         "pstryk.mqtt_common": _mod("pstryk.mqtt_common", setup_periodic_mqtt_publish=None),
+        "pstryk.publication": _mod("pstryk.publication", PublicationTracker=_NoTracker),
     }
 
 
@@ -295,6 +331,7 @@ def mods():
             init=package,
             migrate=importlib.import_module("pstryk.migrate"),
             flow=importlib.import_module("pstryk.config_flow"),
+            unify=importlib.import_module("pstryk.unify_ids"),
             const=importlib.import_module("pstryk.const"),
         )
     finally:
@@ -886,3 +923,191 @@ def test_flow_texts_exist_in_both_languages():
         assert t["options"]["error"]["different_api_key"] and t["options"]["error"]["aio_gone"]
         assert t["options"]["step"]["init"]["data"]["take_over_aio"]
         assert set(t["selector"]["aio_mode"]["options"]) == {"disable", "remove", "fresh"}
+
+
+# ------------------------------------------------------- unify entity ids
+
+STANDARD = {
+    "today_purchase_price": "sensor.pstryk_current_buy_price",
+    "today_sale_price": "sensor.pstryk_current_sell_price",
+    "daily_consumption_cost": "sensor.pstryk_daily_buy_cost",
+    "daily_production_yield": "sensor.pstryk_daily_sell_revenue",
+    "billing_balance_monthly_pln": "sensor.pstryk_monthly_financial_balance",
+    "energy_balance_monthly_kwh": "sensor.pstryk_monthly_energy_balance",
+    "billing_balance_daily_pln": "sensor.pstryk_daily_financial_balance",
+    "energy_balance_daily_kwh": "sensor.pstryk_daily_energy_balance",
+    "consumption_daily_kwh": "sensor.pstryk_daily_energy_bought",
+    "production_daily_kwh": "sensor.pstryk_daily_energy_sold",
+    "consumption_monthly_kwh": "sensor.pstryk_monthly_energy_bought",
+    "production_monthly_kwh": "sensor.pstryk_monthly_energy_sold",
+    "consumption_monthly_cost_pln": "sensor.pstryk_monthly_buy_cost",
+    "production_monthly_yield_pln": "sensor.pstryk_monthly_sell_revenue",
+}
+
+
+def _taken_over(mods):
+    hass, aio, fork = _setup(mods, with_marker=False)
+    _run(mods.init._async_take_over_aio(hass, fork)) if False else _run(
+        mods.migrate.async_migrate_from_aio(hass, fork, aio, "disable"))
+    return hass, fork
+
+
+def _stat_modules(monkeypatch, ids=()):
+    async def listing(hass, statistic_ids=None, statistic_type=None):
+        return [{"statistic_id": i} for i in ids if i in (statistic_ids or ids)]
+
+    monkeypatch.setitem(sys.modules, "homeassistant.components.recorder",
+                        _mod("homeassistant.components.recorder"))
+    monkeypatch.setitem(sys.modules, "homeassistant.components.recorder.statistics",
+                        _mod("homeassistant.components.recorder.statistics", async_list_statistic_ids=listing))
+
+
+def test_standard_ids_are_the_real_ids_of_the_sensors(mods):
+    """Derived ids equal the ids the integration's own sensors have (2.2 and 2.3 lists)."""
+    real = {uid: eid for eid, uid in {**RELEASED_IDS, **IDS_ADDED_IN_2_3_0}.items()}
+    for unique_id in mods.migrate.AIO_TO_FORK.values():
+        assert mods.unify.standard_entity_id(unique_id) == real[unique_id]
+    assert mods.unify.standard_entity_id("pstryk_json_buy") is None
+
+
+def test_every_aio_sensor_gets_its_expected_standard_id(mods):
+    for aio_uid, target in STANDARD.items():
+        assert mods.unify.standard_entity_id(mods.migrate.AIO_TO_FORK[aio_uid]) == target
+
+
+def test_free_targets_are_changed_and_history_key_follows(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    items = _run(mods.unify.async_items(hass, fork))
+    assert len(items) == 14 and {i.status for i in items} == {"free"}
+    done = _run(mods.unify.async_apply(hass, fork, "change", False))
+    assert len(done["renamed"]) == 14 and not done["skipped"]
+    assert {e.entity_id for e in hass.registry.for_entry("fork1")} == set(STANDARD.values())
+    assert hass.services.calls == []  # nothing deleted
+
+
+def test_keep_changes_nothing(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    before = {e.entity_id for e in hass.registry.for_entry("fork1")}
+    done = _run(mods.unify.async_apply(hass, fork, "keep", False))
+    assert done["renamed"] == [] and {e.entity_id for e in hass.registry.for_entry("fork1")} == before
+    assert all(e.name for e in hass.registry.for_entry("fork1"))  # Polish labels stay
+
+
+def test_a_collision_is_skipped_by_change_and_cleared_by_change_all(mods, monkeypatch):
+    target = STANDARD["today_purchase_price"]
+    _stat_modules(monkeypatch, ids=[target])
+    hass, fork = _taken_over(mods)
+    status = {i.unique_id: i.status for i in _run(mods.unify.async_items(hass, fork))}
+    assert status["pstryk_buy_price"] == "collision" and status["pstryk_sell_price"] == "free"
+
+    done = _run(mods.unify.async_apply(hass, fork, "change", False))
+    assert "sensor.pstryk_obecna_cena_zakupu_pradu" in done["skipped"] and done["cleared"] == []
+    assert hass.registry.async_get("sensor.pstryk_obecna_cena_zakupu_pradu") is not None
+    assert hass.services.calls == []
+
+    done = _run(mods.unify.async_apply(hass, fork, "change_all", False))
+    assert done["cleared"] == [target] and hass.registry.async_get(target) is not None
+    assert hass.services.calls == [("recorder", "purge_entities", {"entity_id": [target]})]
+
+
+def test_leftover_state_without_statistics_is_a_collision_too(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    hass.states.known[STANDARD["today_sale_price"]] = object()
+    status = {i.unique_id: i.status for i in _run(mods.unify.async_items(hass, fork))}
+    assert status["pstryk_sell_price"] == "collision"
+
+
+def test_a_target_held_by_another_entity_is_never_touched(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    target = STANDARD["today_purchase_price"]
+    hass.registry.add(target, "someone-else", "other", "x1")
+    status = {i.unique_id: i.status for i in _run(mods.unify.async_items(hass, fork))}
+    assert status["pstryk_buy_price"] == "blocked"
+    done = _run(mods.unify.async_apply(hass, fork, "change_all", False))
+    assert "sensor.pstryk_obecna_cena_zakupu_pradu" in done["skipped"]
+    assert hass.registry.async_get(target).unique_id == "someone-else"
+    assert hass.services.calls == []
+
+
+def test_a_fresh_install_has_nothing_to_unify(mods):
+    hass, aio, fork = _setup(mods, with_marker=False)
+    hass.registry.add("sensor.pstryk_current_buy_price", "pstryk_buy_price", "pstryk", "fork1")
+    items = _run(mods.unify.async_items(hass, fork))
+    assert [i.status for i in items] == ["ok"] and not mods.unify.has_work(items)
+
+
+def test_names_alone_can_be_returned_to_english(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    done = _run(mods.unify.async_apply(hass, fork, "keep", True))
+    assert len(done["names"]) == 14 and done["renamed"] == []
+    assert all(e.name is None for e in hass.registry.for_entry("fork1"))
+    assert "sensor.pstryk_obecna_cena_zakupu_pradu" in {e.entity_id for e in hass.registry.for_entry("fork1")}
+
+
+def test_references_are_counted_when_the_helpers_exist(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    monkeypatch.setitem(sys.modules, "homeassistant.components.automation", _mod(
+        "homeassistant.components.automation", automations_with_entity=lambda h, e: ["a1", "a2"]))
+    monkeypatch.setitem(sys.modules, "homeassistant.components.script", _mod(
+        "homeassistant.components.script", scripts_with_entity=lambda h, e: ["s1"]))
+    hass, fork = _taken_over(mods)  # no scene helper at all: still counted
+    assert {i.references for i in _run(mods.unify.async_items(hass, fork))} == {3}
+
+
+def test_missing_helpers_and_recorder_do_not_break_the_preview(mods, monkeypatch):
+    for name in ("homeassistant.components.recorder.statistics", "homeassistant.components.automation"):
+        monkeypatch.setitem(sys.modules, name, None)  # import raises
+    hass, fork = _taken_over(mods)
+    assert {i.references for i in _run(mods.unify.async_items(hass, fork))} == {0}
+
+
+def test_options_offer_unify_only_when_there_is_something_to_do(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    form = _run(_options_flow(mods, hass, fork, BASE_OPTIONS).async_step_init())
+    key = [k for k in form["data_schema"] if k.schema == "unify_entity_ids"]
+    assert key and key[0].default is False  # never on by itself
+    _run(mods.unify.async_apply(hass, fork, "change", True))
+    form = _run(_options_flow(mods, hass, fork, BASE_OPTIONS).async_step_init())
+    assert not [k for k in form["data_schema"] if k.schema == "unify_entity_ids"]
+
+
+def test_options_unify_step_has_preview_no_preset_and_applies_the_choice(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    flow = _options_flow(mods, hass, fork, BASE_OPTIONS)
+    form = _run(flow.async_step_init({**BASE_OPTIONS, "unify_entity_ids": True}))
+    assert form["step_id"] == "unify_ids"
+    keys = {k.schema: k for k in form["data_schema"]}
+    assert keys["unify_mode"].default == "<none>"  # no preset
+    assert "sensor.pstryk_obecna_cena_zakupu_pradu → sensor.pstryk_current_buy_price" in form["description_placeholders"]["preview"]
+    assert {e.entity_id for e in hass.registry.for_entry("fork1")} >= {"sensor.pstryk_obecna_cena_zakupu_pradu"}  # nothing yet
+    result = _run(flow.async_step_unify_ids({"unify_mode": "change", "english_names": True}))
+    assert result["type"] == "create_entry" and result["data"] == BASE_OPTIONS
+    assert {e.entity_id for e in hass.registry.for_entry("fork1")} == set(STANDARD.values())
+    assert ("reload", "fork1") in hass.config_entries.log
+
+
+def test_options_unify_keep_does_not_reload(mods, monkeypatch):
+    _stat_modules(monkeypatch)
+    hass, fork = _taken_over(mods)
+    flow = _options_flow(mods, hass, fork, BASE_OPTIONS)
+    _run(flow.async_step_init({**BASE_OPTIONS, "unify_entity_ids": True}))
+    _run(flow.async_step_unify_ids({"unify_mode": "keep", "english_names": False}))
+    assert ("reload", "fork1") not in hass.config_entries.log
+
+
+def test_unify_texts_exist_in_both_languages():
+    import json
+    for lang in ("en", "pl"):
+        t = json.loads((PKG / "translations" / f"{lang}.json").read_text())
+        step = t["options"]["step"]["unify_ids"]
+        assert "{preview}" in step["description"] and "{named}" in step["description"]
+        assert step["data"]["unify_mode"] and step["data"]["english_names"]
+        assert t["options"]["step"]["init"]["data"]["unify_entity_ids"]
+        assert set(t["selector"]["unify_mode"]["options"]) == {"keep", "change", "change_all"}

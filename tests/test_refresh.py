@@ -138,6 +138,27 @@ async def _translations(hass, language, category, integrations):
     return dict(TRANSLATIONS)
 
 
+START = {"running": True, "waiting": []}  # async_at_started: run now, or after "Home Assistant has started"
+
+
+def _at_started(hass, callback):
+    if START["running"]:
+        asyncio.ensure_future(callback(hass))
+    else:
+        START["waiting"].append(callback)
+
+
+class _EventEntity(_RestoreEntity):
+    """What PstrykNextDayPricesEvent uses of EventEntity: it records what it fires."""
+
+    @property
+    def fired(self):
+        return self.__dict__.setdefault("_fired", [])
+
+    def _trigger_event(self, event_type, event_attributes=None):
+        self.fired.append((event_type, event_attributes))
+
+
 def _stubs():
     dt = _stub(
         "homeassistant.util.dt",
@@ -175,6 +196,8 @@ def _stubs():
             }),
         ),
         "homeassistant.helpers.event": _stub("homeassistant.helpers.event", async_track_point_in_time=_track),
+        "homeassistant.helpers.start": _stub("homeassistant.helpers.start", async_at_started=_at_started),
+        "homeassistant.components.event": _stub("homeassistant.components.event", EventEntity=_EventEntity),
         "homeassistant.helpers.storage": _stub("homeassistant.helpers.storage", Store=_Store),
         "homeassistant.helpers.restore_state": _stub(
             "homeassistant.helpers.restore_state", RestoreEntity=_RestoreEntity
@@ -232,6 +255,8 @@ def mods():
             button=importlib.import_module("pstryk.button"),
             diagnostics=importlib.import_module("pstryk.diagnostics"),
             prosumer=importlib.import_module("pstryk.prosumer"),
+            publication=importlib.import_module("pstryk.publication"),
+            event=importlib.import_module("pstryk.event"),
         )
     finally:
         for name in [n for n in sys.modules if n == "pstryk" or n.startswith("pstryk.")]:
@@ -319,6 +344,7 @@ def env(mods, monkeypatch):
     CACHE.clear()
     SAVE_DELAYS_MS.clear()
     DURING_SAVE.clear()
+    START.update(running=True, waiting=[])
     _set_clock(2026, 10, 2, 12, 5)
     hass = _Hass()
 
@@ -1797,6 +1823,8 @@ def _all_sensors(mods, env):
         sensors += [S.PstrykTotalSellSensor(cost, k, "e") for k in S.PstrykTotalSellSensor.KINDS]
         sensors += [S.PstrykFinancialBalanceSensor(cost, p, "e") for p in ("daily", "monthly", "yearly")]
         sensors.append(S.PstrykPricesFetchedSensor(coords["buy"], "e"))
+        tracker = mods.publication.PublicationTracker(env.hass, "e")
+        sensors.append(S.PstrykNextDayPublishedSensor(coords["buy"], tracker, "e"))
         return sensors
 
     return _run(scenario())
@@ -1816,7 +1844,7 @@ def test_fork_setup_registers_every_sensor_class_the_tests_cover(mods, env):
 def test_fork_icons_follow_one_scheme(mods, env):
     """Kind of value + direction: price tag for PLN/kWh, tower for kWh, cash for PLN."""
     icons = {s.entity_id: s._attr_icon for s in _all_sensors(mods, env)
-             if s._attr_icon not in ("mdi:code-json", "mdi:cloud-download-outline")}
+             if s._attr_icon not in ("mdi:code-json", "mdi:cloud-download-outline", "mdi:calendar-clock")}
     expected = {}
     for t, icon in (("buy", "mdi:tag-arrow-down"), ("sell", "mdi:tag-arrow-up")):
         expected[f"sensor.pstryk_current_{t}_price"] = icon
@@ -1880,6 +1908,10 @@ RELEASED_IDS = {
 
 # Added in 2.3.0 (purchase counterparts and the kWh energy balance). From the
 # release on they must not change either.
+IDS_ADDED_IN_2_4_0 = {
+    "sensor.pstryk_next_day_prices_published": "pstryk_next_day_prices_published",
+}
+
 IDS_ADDED_IN_2_3_0 = {
     "sensor.pstryk_monthly_buy_cost": "pstryk_buy_cost_monthly",
     "sensor.pstryk_yearly_buy_cost": "pstryk_buy_cost_yearly",
@@ -1895,7 +1927,7 @@ IDS_ADDED_IN_2_3_0 = {
 
 def test_fork_entity_and_unique_ids_never_change(mods, env):
     ids = {s.entity_id: s.unique_id for s in _all_sensors(mods, env)}
-    assert ids == {**RELEASED_IDS, **IDS_ADDED_IN_2_3_0}
+    assert ids == {**RELEASED_IDS, **IDS_ADDED_IN_2_3_0, **IDS_ADDED_IN_2_4_0}
 
 
 def test_fork_names_group_by_period_then_direction(mods, env):
@@ -1924,6 +1956,7 @@ def test_fork_names_group_by_period_then_direction(mods, env):
         "Pstryk Monthly Sell Price Average",
         "Pstryk Monthly Sell Revenue",
         "Pstryk Monthly Sell Volume",
+        "Pstryk Next Day Prices Published",
         "Pstryk Prices Fetched",
         "Pstryk Total Buy Cost",
         "Pstryk Total Buy Price Average",

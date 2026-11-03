@@ -2,7 +2,8 @@
   "domain": "pstryk",
   "name": "Pstryk Energy",
   "after_dependencies": [
-    "mqtt"
+    "mqtt",
+    "recorder"
   ],
   "codeowners": [
     "@kriskomp"
@@ -11,5 +12,5 @@
   "documentation": "https://github.com/kriskomp/ha_Pstryk",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/kriskomp/ha_Pstryk/issues",
-  "version": "2.3.1"
+  "version": "2.4.0"
 }

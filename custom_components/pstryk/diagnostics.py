@@ -220,6 +220,10 @@ async def async_get_config_entry_diagnostics(
     else:
         diagnostics_data["mqtt"]["enabled"] = False
 
+    publication = hass.data.get(DOMAIN, {}).get(f"{entry.entry_id}_publication")
+    if publication is not None:
+        diagnostics_data["next_day_publication"] = publication.describe()
+
     prosumer = hass.data.get(DOMAIN, {}).get(f"{entry.entry_id}_prosumer")
     if prosumer is not None:
         diagnostics_data["prosumer_entities"] = prosumer.describe()
