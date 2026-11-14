@@ -303,7 +303,7 @@ W opcjach (*Konfiguruj*) i przy pierwszej konfiguracji: **liczba prób** na jedn
 
 12 encji dotyczy wyłącznie sprzedaży (przychód, energia sprzedana i średnia cena sprzedaży: dzień, miesiąc, rok, całość). Bez instalacji PV zostają zerowe lub nieznane, więc opcja **Encje sprzedaży** (*Konfiguruj*) decyduje, czy są włączone:
 
-- **Automatycznie** (domyślnie, także po aktualizacji): encje są **wyłączone**, dopóki w danych nie widać żadnej sprzedaży (historia od 10.2024 oraz bieżący dzień, miesiąc i rok). Przy pierwszej sprzedaży integracja je włącza i dostajesz jedno powiadomienie; Home Assistant dodaje je w ciągu ok. 30 sekund (sam przeładowuje wpis po włączeniu encji). Do czasu pobrania historii nic nie jest wyłączane.
+- **Automatycznie** (domyślnie, także po aktualizacji): encje są **wyłączone**, dopóki w danych nie widać sprzedaży, czyli przychodu ze sprzedaży energii (`energy_sold_value`) co najmniej 0,01 zł w historii od 10.2024 albo w bieżącym dniu, miesiącu lub roku; same kWh z licznika i szum API (rzędu 10⁻⁷) nie liczą się. Przy pierwszej sprzedaży integracja je włącza i dostajesz jedno powiadomienie; Home Assistant dodaje je w ciągu ok. 30 sekund (sam przeładowuje wpis po włączeniu encji). Do czasu pobrania historii nic nie jest wyłączane.
 - **Zawsze włączone**: nigdy nie wyłącza.
 - **Zawsze wyłączone**: zawsze wyłącza.
 

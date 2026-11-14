@@ -6,6 +6,14 @@ Wersje do 2.1.4 włącznie: [oryginał balgerion/ha_Pstryk](https://github.com/b
 
 Kod polecający Pstryk: **1ML2X7**.
 
+## 2.4.1
+
+- **Poprawka: fałszywe „wykryto sprzedaż” (encje sprzedaży włączały się bez prosumenta).** API zwraca dla umów
+  bez sprzedaży szum zmiennoprzecinkowy (ok. 2·10⁻⁷ kWh i 1,2·10⁻⁷ zł), a warunek `> 0` uznawał go za sprzedaż.
+  Teraz sprzedaż to wyłącznie **przychód** (`energy_sold_value`: suma roczna z historii oraz dzień, miesiąc, rok)
+  **co najmniej 0,01 zł**; same kilowatogodziny z licznika nie wystarczą. Kto już dostał fałszywe powiadomienie,
+  wyłącza encje ręcznie albo ustawia *Konfiguruj → Encje sprzedaży → Wyłączone*.
+
 ## 2.4.0
 
 - **Ujednolicenie identyfikatorów przejętych encji (opcjonalne, w opcjach integracji).** Przejęcie z Pstryk AiO
