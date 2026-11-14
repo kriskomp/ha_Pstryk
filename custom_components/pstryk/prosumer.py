@@ -15,9 +15,11 @@ Setting "prosumer_entities":
   disable  always disable
 
 A sale is seen when the history from October 2024 (every year, the current month
-included) or the day, month or year in progress holds any energy sold or revenue.
-Meter readings from before the contract count too. Until the history has been
-fetched nothing is decided and nothing is disabled.
+included) or the day, month or year in progress holds sale revenue
+(energy_sold_value) of at least MIN_REVENUE. Energy volumes (the export register,
+"rae") do not count: the API reports float noise there (about 2e-7 kWh) for
+customers who sell nothing. Until the history has been fetched nothing is
+decided and nothing is disabled.
 
 The user stays in charge: only entities disabled by this integration are ever
 enabled again, an entity the user disabled or enabled by hand is not touched a
@@ -44,6 +46,8 @@ STORE_VERSION = 1
 NOTIFICATION_ID = f"{DOMAIN}_sale_detected"
 # Period data that already shows a sale (the history decides "no sale").
 PERIODS = ("daily", "monthly", "yearly")
+# PLN. The API returns noise of about 1e-7 for customers who sell nothing.
+MIN_REVENUE = 0.01
 
 DISABLED = "disabled"
 SHOWN = "shown"
@@ -58,11 +62,11 @@ def sale_seen(data: dict | None) -> bool | None:
         return None
     years = (data.get("history") or {}).get("years") or {}
     for year in years.values():
-        if (year.get("energy_sold") or 0) > 0 or (year.get("sell_revenue") or 0) > 0:
+        if (year.get("sell_revenue") or 0) >= MIN_REVENUE:
             return True
     for period in PERIODS:
         values = data.get(period) or {}
-        if (values.get("rae_usage") or 0) > 0 or (values.get("total_sold") or 0) > 0:
+        if (values.get("total_sold") or 0) >= MIN_REVENUE:
             return True
     return False if years else None
 

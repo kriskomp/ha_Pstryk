@@ -89,7 +89,7 @@
         },
         "data_description": {
           "json_sensor_enabled": "Dodaje sensory Pstryk Json Buy/Sell ze standardowymi atrybutami prices_today, prices_tomorrow i prices (kompatybilne z EV Smart Charging, cheapest-energy-hours itp.)",
-          "prosumer_entities": "Dwanaście encji opisuje tylko sprzedaż energii. Bez sprzedaży zostają zerowe lub nieznane. Automatycznie: wyłączone, dopóki w danych Pstryk nie widać żadnej sprzedaży; po pierwszej sprzedaży włączane (z powiadomieniem), a Home Assistant dodaje je w ciągu ok. 30 sekund. Wartości biorą się z sum Pstryka, więc niczego potem nie brakuje",
+          "prosumer_entities": "Dwanaście encji opisuje tylko sprzedaż energii. Bez sprzedaży zostają zerowe lub nieznane. Automatycznie: wyłączone, dopóki w danych Pstryk nie widać przychodu ze sprzedaży (min. 0,01 zł); po pierwszej sprzedaży włączane (z powiadomieniem), a Home Assistant dodaje je w ciągu ok. 30 sekund. Wartości biorą się z sum Pstryka, więc niczego potem nie brakuje",
           "take_over_aio": "Otwiera kolejny krok: przeniesienie encji Pstryk AiO do tej integracji (z identyfikatorami, nazwami i historią)",
           "unify_entity_ids": "Przejęte encje Pstryk AiO mają jeszcze swoje stare identyfikatory. Otwiera podgląd zmiany na identyfikatory tej integracji; nic nie zmieni się bez Twojego wyboru"
         }

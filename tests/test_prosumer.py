@@ -116,20 +116,27 @@ def test_no_sale_anywhere(mods):
     assert mods.prosumer.sale_seen(data) is False
 
 
-@pytest.mark.parametrize("year", [{"energy_sold": 0.01}, {"sell_revenue": 0.01}])
+@pytest.mark.parametrize("year", [{"sell_revenue": 0.01}, {"energy_sold": 5, "sell_revenue": 3.2}])
 def test_a_sale_in_any_year_is_seen(mods, year):
     data = _data({"years": {"2024": {"energy_sold": 0, "sell_revenue": 0}, "2025": year}})
     assert mods.prosumer.sale_seen(data) is True
 
 
 @pytest.mark.parametrize("period,field", [
-    ("daily", "rae_usage"), ("daily", "total_sold"), ("monthly", "rae_usage"),
-    ("monthly", "total_sold"), ("yearly", "rae_usage"), ("yearly", "total_sold"),
+    ("daily", "total_sold"), ("monthly", "total_sold"), ("yearly", "total_sold"),
 ])
 def test_a_sale_in_the_running_period_is_seen_even_before_history(mods, period, field):
     assert mods.prosumer.sale_seen(_data(**{period: {field: 0.4}})) is True
     # ... and on top of a history without sales
     assert mods.prosumer.sale_seen(_data(_years(**{"2026": (0, 0)}), **{period: {field: 0.4}})) is True
+
+
+def test_api_float_noise_is_not_a_sale(mods):
+    """Real data of a customer without a sale: rae 2e-7 kWh, energy_sold_value 1.2e-7 PLN."""
+    noise = {"rae_usage": 1.9999999494757504e-7, "total_sold": 1.206433169522934e-7}
+    assert mods.prosumer.sale_seen(_data(_years(**{"2026": (0, 0)}), daily=noise, monthly=noise, yearly=noise)) is False
+    # volume alone, without revenue, is not a sale either
+    assert mods.prosumer.sale_seen(_data(_years(**{"2026": (0, 0)}), daily={"rae_usage": 0.4})) is False
 
 
 def test_period_zero_without_history_is_still_undecided(mods):

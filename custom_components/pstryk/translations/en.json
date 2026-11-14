@@ -109,7 +109,7 @@
           "retry_attempts": "Attempts per request, the first one included (1-3). The Pstryk API allows 3 requests per hour in total, so more attempts make no sense and, when the API is down, each one uses up the limit. Recommended: 2",
           "retry_delay": "Wait time between API retry attempts",
           "json_sensor_enabled": "Adds Pstryk Json Buy/Sell sensors with standardized prices_today, prices_tomorrow and prices attributes (compatible with EV Smart Charging, cheapest-energy-hours etc.)",
-          "prosumer_entities": "Twelve entities only describe selling energy. Without a sale they stay at zero or unknown. Automatic: disabled while no sale has been seen in the Pstryk data, enabled (with a notification) on the first sale; Home Assistant then adds them within about 30 seconds. Their values come from the Pstryk totals, so nothing is missing afterwards",
+          "prosumer_entities": "Twelve entities only describe selling energy. Without a sale they stay at zero or unknown. Automatic: disabled while no sale revenue (at least 0.01 PLN) has been seen in the Pstryk data, enabled (with a notification) on the first sale; Home Assistant then adds them within about 30 seconds. Their values come from the Pstryk totals, so nothing is missing afterwards",
           "take_over_aio": "Opens the next step: move the entities of Pstryk AiO to this integration (keeping ids, names and history)",
           "unify_entity_ids": "Taken-over Pstryk AiO entities still carry their old IDs. Opens a preview of the change to this integration's IDs; nothing changes without your choice"
         }
